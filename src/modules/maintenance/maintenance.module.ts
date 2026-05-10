@@ -8,13 +8,17 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { EmailService } from "../email/email.service";
 
 const FIELDS = ["unitLabel", "description", "priority", "status", "supplier", "estimatedCost", "tenantId", "contractId"] as const;
 
 @Controller("maintenance")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class MaintenanceController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   @Get()
   @RequirePermissions(PERMISSIONS.MAINTENANCE_VIEW)
@@ -108,7 +112,44 @@ class MaintenanceController {
       supplier: body.supplier ?? null,
       estimatedCost: body.estimatedCost ? String(body.estimatedCost) : null,
     }).returning();
+
+    void this.notifyAdmin(row!);
+
     return row;
+  }
+
+  private async notifyAdmin(row: typeof maintenanceRequestsTable.$inferSelect) {
+    try {
+      let tenantName: string | null = null;
+      let tenantPhone: string | null = null;
+      let propertyName: string | null = null;
+      if (row.tenantId) {
+        const [t] = await this.db.select({ name: tenantsTable.name, phone: tenantsTable.phone }).from(tenantsTable).where(eq(tenantsTable.id, row.tenantId));
+        tenantName = t?.name ?? null;
+        tenantPhone = t?.phone ?? null;
+      }
+      if (row.contractId) {
+        const [p] = await this.db
+          .select({ propertyName: propertiesTable.name })
+          .from(contractsTable)
+          .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
+          .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
+          .where(eq(contractsTable.id, row.contractId));
+        propertyName = p?.propertyName ?? null;
+      }
+      await this.email.sendMaintenanceCreated({
+        id: row.id,
+        unitLabel: row.unitLabel,
+        description: row.description,
+        priority: row.priority,
+        status: row.status,
+        tenantName,
+        tenantPhone,
+        propertyName,
+      });
+    } catch (err) {
+      console.error("[maintenance] notifyAdmin failed:", err);
+    }
   }
 
   @Patch(":id")

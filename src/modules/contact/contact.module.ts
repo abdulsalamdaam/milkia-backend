@@ -10,6 +10,7 @@ import { SuperAdminGuard } from "../../common/guards/roles.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { OtpThrottlerGuard } from "../../common/throttler";
+import { EmailService } from "../email/email.service";
 
 class CreateContactDto {
   @IsOptional()
@@ -51,7 +52,10 @@ class UpdateContactDto {
 /* ── Public submit (rate-limited per IP+identifier) ─────────────── */
 @Controller("public/contact")
 class PublicContactController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   @Post()
   @HttpCode(201)
@@ -80,6 +84,15 @@ class PublicContactController {
       ip,
       userAgent,
     }).returning();
+
+    void this.email.sendContactReceived({
+      id: row!.id,
+      name: row!.name,
+      email: row!.email,
+      phone: row!.phone,
+      description: row!.description,
+      source: row!.source,
+    });
 
     return {
       success: true,

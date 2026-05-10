@@ -5,6 +5,8 @@ import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 
 import { DatabaseModule } from "./database/database.module";
 import { TwilioModule } from "./modules/twilio/twilio.module";
+import { EmailModule } from "./modules/email/email.module";
+import { UploadsModule } from "./modules/uploads/uploads.module";
 import { HealthModule } from "./modules/health/health.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { StatsModule } from "./modules/stats/stats.module";
@@ -40,6 +42,8 @@ import { InvoiceModule } from "./modules/invoice/invoice.module";
     ]),
     DatabaseModule,
     TwilioModule,
+    EmailModule,
+    UploadsModule,
     HealthModule,
     AuthModule,
     StatsModule,

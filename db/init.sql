@@ -2,7 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict KKVdiyrBfP3PqgKaLx3qXnbkQtDlkGplAM6PJ6djQKDEoKcuxwrgZGjCS71NdhW
 
 -- Dumped from database version 16.13 (Homebrew)
 -- Dumped by pg_dump version 16.13 (Homebrew)
@@ -12,7 +11,7 @@ SET lock_timeout = 0;
 SET idle_in_transaction_session_timeout = 0;
 SET client_encoding = 'UTF8';
 SET standard_conforming_strings = on;
-SELECT pg_catalog.set_config('search_path', '', false);
+SET search_path TO public;
 SET check_function_bodies = false;
 SET xmloption = content;
 SET client_min_messages = warning;
@@ -22,14 +21,12 @@ SET row_security = off;
 -- Name: public; Type: SCHEMA; Schema: -; Owner: -
 --
 
-CREATE SCHEMA public;
 
 
 --
 -- Name: SCHEMA public; Type: COMMENT; Schema: -; Owner: -
 --
 
-COMMENT ON SCHEMA public IS 'standard public schema';
 
 
 --
@@ -1204,7 +1201,6 @@ ALTER TABLE ONLY public.users
 -- PostgreSQL database dump complete
 --
 
-\unrestrict KKVdiyrBfP3PqgKaLx3qXnbkQtDlkGplAM6PJ6djQKDEoKcuxwrgZGjCS71NdhW
 
 
 -- ─── ZATCA / e-invoice schema ────────────────────────────

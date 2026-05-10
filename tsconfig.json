@@ -18,7 +18,7 @@
     "noImplicitReturns": false,
     "declaration": false,
     "noEmitOnError": false,
-    "types": ["node"],
+    "types": ["node", "multer", "express"],
     "baseUrl": ".",
     "paths": {
       "@milkia/database": ["./db/src/index"],

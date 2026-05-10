@@ -7,6 +7,7 @@ import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { TwilioVerifyService } from "../twilio/twilio-verify.service";
+import { EmailService } from "../email/email.service";
 import { effectivePermissions, ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
 
 const MAX_FAILED = 5;
@@ -17,6 +18,7 @@ export class AuthService {
     @Inject(DRIZZLE) private readonly db: Drizzle,
     private readonly jwt: JwtService,
     private readonly twilio: TwilioVerifyService,
+    private readonly email: EmailService,
   ) {}
 
   private device(ua: string | undefined): string {
@@ -155,6 +157,8 @@ export class AuthService {
       phone: phone ?? null,
       company: company ?? null,
     }).returning();
+
+    void this.email.sendWelcome(user!.email, user!.name);
 
     return {
       pending: true,

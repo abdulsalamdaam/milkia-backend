@@ -1,0 +1,187 @@
+import { Injectable, Logger } from "@nestjs/common";
+
+export interface SendEmailInput {
+  to: string | string[];
+  subject: string;
+  html: string;
+  text?: string;
+  replyTo?: string;
+  /** Optional override of the configured "from" address. */
+  from?: string;
+}
+
+export interface MaintenanceEmailPayload {
+  id: number;
+  unitLabel: string | null;
+  description: string;
+  priority: string | null;
+  status: string | null;
+  tenantName?: string | null;
+  tenantPhone?: string | null;
+  propertyName?: string | null;
+}
+
+export interface ContactEmailPayload {
+  id: number;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  description: string;
+  source: string | null;
+}
+
+/**
+ * Resend wrapper. We hit the REST API directly (same pattern as the Twilio
+ * service) to avoid pulling in another SDK. Failures are logged but never
+ * thrown to the caller — email is best-effort and must not block user flows
+ * like registration or contact-form submissions.
+ */
+@Injectable()
+export class EmailService {
+  private readonly log = new Logger(EmailService.name);
+  private readonly apiKey = process.env.RESEND_API_KEY || "";
+  private readonly from = process.env.RESEND_FROM || "Milkia <noreply@milkia.net>";
+  private readonly adminEmail = process.env.ADMIN_NOTIFY_EMAIL || "";
+
+  isConfigured(): boolean {
+    return Boolean(this.apiKey);
+  }
+
+  /** Low-level send. Returns true on 2xx, false otherwise. Never throws. */
+  async send(input: SendEmailInput): Promise<boolean> {
+    if (!this.isConfigured()) {
+      this.log.warn("Resend not configured (RESEND_API_KEY missing); skipping email");
+      return false;
+    }
+    try {
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${this.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: input.from || this.from,
+          to: Array.isArray(input.to) ? input.to : [input.to],
+          subject: input.subject,
+          html: input.html,
+          text: input.text,
+          reply_to: input.replyTo,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        this.log.error(`Resend send failed: ${res.status} ${body}`);
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      this.log.error(`Resend send threw: ${err?.message || err}`);
+      return false;
+    }
+  }
+
+  /* ── Templates ─────────────────────────────────────────────── */
+
+  async sendWelcome(to: string, name: string): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">مرحباً ${safeName} 👋</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        شكراً لتسجيلك في <strong>Milkia</strong>. تم استلام طلبك بنجاح، وسيقوم فريقنا بمراجعة الحساب وتفعيله خلال وقت قصير.
+      </p>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        سنرسل لك بريداً آخر فور تفعيل الحساب لتتمكّن من الدخول وإدارة عقاراتك.
+      </p>
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        إذا لم تقم أنت بالتسجيل، يمكنك تجاهل هذه الرسالة.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: "أهلاً بك في Milkia",
+      html,
+      text: `مرحباً ${name}، شكراً لتسجيلك في Milkia. سيقوم فريقنا بمراجعة حسابك وتفعيله قريباً.`,
+    });
+  }
+
+  async sendMaintenanceCreated(payload: MaintenanceEmailPayload, to?: string): Promise<boolean> {
+    const recipient = to || this.adminEmail;
+    if (!recipient) {
+      this.log.warn("sendMaintenanceCreated: no recipient (set ADMIN_NOTIFY_EMAIL)");
+      return false;
+    }
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:20px;">طلب صيانة جديد #${payload.id}</h1>
+      ${row("الوحدة", payload.unitLabel || "—")}
+      ${row("العقار", payload.propertyName || "—")}
+      ${row("المستأجر", payload.tenantName || "—")}
+      ${row("رقم المستأجر", payload.tenantPhone || "—")}
+      ${row("الأولوية", payload.priority || "medium")}
+      ${row("الحالة", payload.status || "open")}
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#64748b;font-size:12px;margin-bottom:6px;">الوصف</div>
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(payload.description)}</div>
+      </div>
+    `);
+    return this.send({
+      to: recipient,
+      subject: `طلب صيانة جديد #${payload.id} — ${payload.unitLabel || "وحدة"}`,
+      html,
+    });
+  }
+
+  async sendContactReceived(payload: ContactEmailPayload, to?: string): Promise<boolean> {
+    const recipient = to || this.adminEmail;
+    if (!recipient) {
+      this.log.warn("sendContactReceived: no recipient (set ADMIN_NOTIFY_EMAIL)");
+      return false;
+    }
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:20px;">رسالة جديدة من نموذج التواصل #${payload.id}</h1>
+      ${row("الاسم", payload.name || "—")}
+      ${row("البريد", payload.email || "—")}
+      ${row("الجوال", payload.phone || "—")}
+      ${row("المصدر", payload.source || "—")}
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#64748b;font-size:12px;margin-bottom:6px;">الرسالة</div>
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(payload.description)}</div>
+      </div>
+    `);
+    return this.send({
+      to: recipient,
+      subject: `رسالة تواصل جديدة #${payload.id}${payload.name ? ` — ${payload.name}` : ""}`,
+      html,
+      replyTo: payload.email || undefined,
+    });
+  }
+}
+
+function escapeHtml(value: string): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function row(label: string, value: string): string {
+  return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;">
+    <span style="color:#64748b;font-size:13px;">${escapeHtml(label)}</span>
+    <span style="color:#0f172a;font-weight:500;">${escapeHtml(value)}</span>
+  </div>`;
+}
+
+function layout(inner: string): string {
+  return `<!doctype html>
+<html dir="rtl" lang="ar"><head><meta charset="utf-8"></head>
+<body style="margin:0;padding:24px;background:#f1f5f9;font-family:-apple-system,Segoe UI,Tahoma,Arial,sans-serif;">
+  <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;padding:28px;">
+    ${inner}
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0 12px;">
+    <div style="color:#94a3b8;font-size:12px;text-align:center;">Milkia · إدارة الأملاك</div>
+  </div>
+</body></html>`;
+}

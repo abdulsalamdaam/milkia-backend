@@ -2,8 +2,14 @@ import "reflect-metadata";
 import { NestFactory } from "@nestjs/core";
 import { ValidationPipe, Logger } from "@nestjs/common";
 import { AppModule } from "./app.module";
+import { ensureSchema } from "./database/bootstrap";
 
 async function bootstrap() {
+  // Run schema initializer BEFORE the Nest factory builds providers — many
+  // providers query the DB at construction time, which would crash on a
+  // fresh empty DB. ensureSchema is a no-op when tables already exist.
+  await ensureSchema();
+
   const app = await NestFactory.create(AppModule);
 
   app.setGlobalPrefix("api");

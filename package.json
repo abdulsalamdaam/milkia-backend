@@ -21,6 +21,8 @@
     "node": "22.x"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1045.0",
+    "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@nestjs/common": "^10.4.15",
     "@nestjs/config": "^3.3.0",
     "@nestjs/core": "^10.4.15",
@@ -33,6 +35,7 @@
     "class-validator": "^0.14.2",
     "drizzle-orm": "^0.45.1",
     "drizzle-zod": "^0.8.3",
+    "multer": "^2.1.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "pg": "^8.20.0",
@@ -45,6 +48,7 @@
     "@nestjs/schematics": "^10.2.3",
     "@types/bcryptjs": "^3.0.0",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.1.0",
     "@types/node": "^22.10.0",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.18.0",
