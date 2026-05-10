@@ -25,6 +25,7 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/db/drizzle ./db/drizzle
 COPY --from=builder /app/db/init.sql ./db/init.sql
+COPY --from=builder /app/db/data.sql ./db/data.sql
 COPY --from=builder /app/package.json ./package.json
 
 EXPOSE 4000
