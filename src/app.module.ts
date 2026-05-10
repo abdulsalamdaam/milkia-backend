@@ -1,7 +1,8 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { APP_GUARD } from "@nestjs/core";
-import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
+import { ThrottlerModule } from "@nestjs/throttler";
+import { OtpThrottlerGuard } from "./common/throttler";
 
 import { DatabaseModule } from "./database/database.module";
 import { TwilioModule } from "./modules/twilio/twilio.module";
@@ -68,7 +69,12 @@ import { CompaniesModule } from "./modules/companies/companies.module";
     CompaniesModule,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // OtpThrottlerGuard extends ThrottlerGuard with two improvements: (1) it
+    // honors the OTP_DEV_BYPASS env flag, (2) for OTP-style requests it tracks
+    // per (IP + email/phone/identifier) instead of per-IP only. It's a strict
+    // superset for non-OTP routes (falls back to IP-only tracking when no
+    // identifier is in the body).
+    { provide: APP_GUARD, useClass: OtpThrottlerGuard },
   ],
 })
 export class AppModule {}

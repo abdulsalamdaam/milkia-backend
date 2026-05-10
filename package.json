@@ -15,7 +15,8 @@
     "db:generate": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs generate --config ./db/drizzle.config.ts",
     "db:migrate": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs migrate --config ./db/drizzle.config.ts",
     "db:studio": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs studio --config ./db/drizzle.config.ts",
-    "db:seed": "tsx --env-file=.env ./db/src/seed.ts"
+    "db:seed": "tsx --env-file=.env ./db/src/seed.ts",
+    "db:seed:test": "node --env-file=.env -e \"const{spawnSync}=require('node:child_process');process.exit(spawnSync('psql',[process.env.DATABASE_URL,'-f','./db/sql/seed_test.sql'],{stdio:'inherit'}).status)\""
   },
   "engines": {
     "node": "22.x"
