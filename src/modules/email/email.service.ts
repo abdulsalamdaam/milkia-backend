@@ -1,4 +1,5 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { LOGO_DATA_URI } from "./email-assets";
 
 export interface SendEmailInput {
   to: string | string[];
@@ -239,12 +240,34 @@ function row(label: string, value: string): string {
 
 function layout(inner: string): string {
   return `<!doctype html>
-<html dir="rtl" lang="ar"><head><meta charset="utf-8"></head>
-<body style="margin:0;padding:24px;background:#f1f5f9;font-family:-apple-system,Segoe UI,Tahoma,Arial,sans-serif;">
-  <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;border:1px solid #e2e8f0;padding:28px;">
-    ${inner}
-    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0 12px;">
-    <div style="color:#94a3b8;font-size:12px;text-align:center;">Milkia · إدارة الأملاك</div>
-  </div>
-</body></html>`;
+<html dir="rtl" lang="ar">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Milkia</title>
+</head>
+<body style="margin:0;padding:32px 16px;background:#eef2f7;font-family:-apple-system,'Segoe UI',Tahoma,Arial,'Tajawal',sans-serif;color:#0f172a;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;">
+    <!-- Logo header — soft brand-blue gradient banner -->
+    <tr>
+      <td style="background:linear-gradient(135deg,#eff6ff 0%,#e0e7ff 100%);border-radius:16px 16px 0 0;padding:28px 24px;text-align:center;border:1px solid #e2e8f0;border-bottom:0;">
+        <img src="${LOGO_DATA_URI}" alt="Milkia · ملكية" width="160" height="80" style="display:inline-block;height:auto;max-width:160px;border:0;outline:none;text-decoration:none;">
+      </td>
+    </tr>
+    <!-- Main content card -->
+    <tr>
+      <td style="background:#ffffff;border-radius:0 0 16px 16px;border:1px solid #e2e8f0;border-top:0;padding:32px;line-height:1.65;">
+        ${inner}
+      </td>
+    </tr>
+    <!-- Footer -->
+    <tr>
+      <td style="padding:20px 8px 0;text-align:center;color:#94a3b8;font-size:12px;">
+        <div style="margin-bottom:6px;">© ${new Date().getFullYear()} Milkia · ملكية — منصة إدارة العقارات</div>
+        <div><a href="https://milkia.net" style="color:#94a3b8;text-decoration:none;">milkia.net</a></div>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 }

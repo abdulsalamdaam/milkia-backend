@@ -46,22 +46,27 @@ export class AuthController {
   }
 
   /* ── User: email-OTP login (current primary) ──────────────────── */
-  // Send a 6-digit code to the user's email. 1/min and 5/hour per (IP+email).
+  // Send a 6-digit code to the user's email. Tracker is per (IP+email) via
+  // OtpThrottlerGuard so distinct emails don't share buckets. Limits are
+  // intentionally generous — we want users who mistype to retry without
+  // friction. Brute-force is also rate-limited by the per-token attempts
+  // counter in AuthService (5 wrong codes burns the token).
   @Post("email-otp/request")
   @HttpCode(200)
   @Throttle({
-    short: { limit: 1, ttl: 60_000 },
-    long:  { limit: 5, ttl: 3600_000 },
+    short: { limit: 5,  ttl: 60_000   },  // 5 / minute per (IP+email)
+    long:  { limit: 30, ttl: 3600_000 },  // 30 / hour  per (IP+email)
   })
   @UseGuards(OtpThrottlerGuard)
   emailOtpRequest(@Body() body: EmailOtpRequestDto, @Req() req: Request) {
     return this.auth.requestEmailOtp(body, clientCtx(req));
   }
 
-  // Verify the code and issue a JWT. 5 attempts per 5 min per (IP+email).
+  // Verify the code. 10 attempts per 5 min per (IP+email). The token row
+  // also burns after 5 wrong attempts (handled inside AuthService).
   @Post("email-otp/verify")
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 300_000 } })
+  @Throttle({ default: { limit: 10, ttl: 300_000 } })
   @UseGuards(OtpThrottlerGuard)
   emailOtpVerify(@Body() body: EmailOtpVerifyDto, @Req() req: Request) {
     return this.auth.verifyEmailOtp(body, clientCtx(req));
