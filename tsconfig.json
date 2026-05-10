@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "rootDir": ".",
+    "outDir": "dist",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "strict": false,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "removeComments": true,
+    "isolatedModules": false,
+    "noImplicitAny": false,
+    "noImplicitReturns": false,
+    "declaration": false,
+    "noEmitOnError": false,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@milkia/database": ["./db/src/index"],
+      "@milkia/database/schema": ["./db/src/schema/index"]
+    }
+  },
+  "include": ["src", "db/src"]
+}

@@ -1,0 +1,57 @@
+{
+  "name": "milkia-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Milkia property-management API (NestJS + Drizzle).",
+  "scripts": {
+    "dev": "nest start --watch --preserveWatchOutput",
+    "build": "nest build && tsc-alias -p tsconfig.build.json",
+    "start": "node dist/src/main.js",
+    "start:local": "node --env-file=.env dist/src/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test 'src/**/*.spec.ts'",
+    "db:push": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs push --config ./db/drizzle.config.ts",
+    "db:push:force": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs push --force --config ./db/drizzle.config.ts",
+    "db:generate": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs generate --config ./db/drizzle.config.ts",
+    "db:migrate": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs migrate --config ./db/drizzle.config.ts",
+    "db:studio": "tsx --env-file=.env ./node_modules/drizzle-kit/bin.cjs studio --config ./db/drizzle.config.ts",
+    "db:seed": "tsx --env-file=.env ./db/src/seed.ts"
+  },
+  "engines": {
+    "node": "22.x"
+  },
+  "dependencies": {
+    "@nestjs/common": "^10.4.15",
+    "@nestjs/config": "^3.3.0",
+    "@nestjs/core": "^10.4.15",
+    "@nestjs/jwt": "^10.2.0",
+    "@nestjs/passport": "^10.0.3",
+    "@nestjs/platform-express": "^10.4.15",
+    "@nestjs/throttler": "^6.5.0",
+    "bcryptjs": "^3.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.2",
+    "drizzle-orm": "^0.45.1",
+    "drizzle-zod": "^0.8.3",
+    "passport": "^0.7.0",
+    "passport-jwt": "^4.0.1",
+    "pg": "^8.20.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@nestjs/cli": "^10.4.9",
+    "@nestjs/schematics": "^10.2.3",
+    "@types/bcryptjs": "^3.0.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.10.0",
+    "@types/passport-jwt": "^4.0.1",
+    "@types/pg": "^8.18.0",
+    "drizzle-kit": "^0.31.9",
+    "ts-loader": "^9.5.2",
+    "tsc-alias": "^1.8.17",
+    "tsx": "^4.21.0",
+    "typescript": "~5.9.2"
+  }
+}

@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+.turbo
+.env
+.env.*
+.git
+.gitignore
+.dockerignore
+.idea
+.vscode
+.claude
+*.log
+README.md
+coolify.md
