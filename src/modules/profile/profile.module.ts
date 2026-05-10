@@ -19,8 +19,6 @@ const USER_PROFILE_FIELDS = {
   name: usersTable.name,
   email: usersTable.email,
   phone: usersTable.phone,
-  role: usersTable.role,
-  roleLabel: usersTable.roleLabel,
   companyId: usersTable.companyId,
   roleId: usersTable.roleId,
   createdAt: usersTable.createdAt,

@@ -1,7 +1,7 @@
 import { Body, Controller, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { desc, eq } from "drizzle-orm";
-import { supportTicketsTable, supportMessagesTable, usersTable } from "@milkia/database";
+import { supportTicketsTable, supportMessagesTable, usersTable, companiesTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -32,10 +32,11 @@ class SupportController {
           updatedAt: supportTicketsTable.updatedAt,
           userName: usersTable.name,
           userEmail: usersTable.email,
-          userCompany: usersTable.company,
+          userCompany: companiesTable.name,
         })
         .from(supportTicketsTable)
         .leftJoin(usersTable, eq(supportTicketsTable.userId, usersTable.id))
+        .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
         .orderBy(desc(supportTicketsTable.updatedAt));
 
       return Promise.all(tickets.map(async (t) => {

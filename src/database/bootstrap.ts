@@ -40,6 +40,7 @@ function findSqlFile(name: string): string | null {
  */
 const PASSIVE_MIGRATIONS = [
   "2026_05_companies_roles_email_otp.sql",
+  "2026_05_drop_legacy_user_columns.sql",
 ];
 
 async function runSqlFile(client: any, label: string, file: string) {
@@ -93,25 +94,35 @@ export async function ensureSchema(): Promise<void> {
     }
 
     // Phase 1.6: refresh system role permissions on every boot. Keeps the
-    // roles table in sync with code-side ROLE_PRESETS without requiring a
-    // hand-written migration each time we add a permission.
+    // roles table in sync with code-side ROLE_PRESETS + EMPLOYEE_PRESETS
+    // without requiring a hand-written migration each time we add a
+    // permission. Upserts (insert if missing, update if present) so a new
+    // preset added in code shows up in the DB on next boot.
     try {
-      const { ROLE_PRESETS, ALL_PERMISSIONS } = await import("../common/permissions");
+      const { ROLE_PRESETS, ALL_PERMISSIONS, EMPLOYEE_PRESETS } = await import("../common/permissions");
       const presets: Array<{ key: string; perms: readonly string[]; labelAr: string; labelEn: string }> = [
         { key: "super_admin", perms: ALL_PERMISSIONS, labelAr: "مدير النظام", labelEn: "Super Admin" },
         { key: "admin",       perms: ROLE_PRESETS.admin, labelAr: "مشرف",         labelEn: "Admin" },
         { key: "user",        perms: ROLE_PRESETS.user,  labelAr: "مالك / مدير",  labelEn: "Owner / Manager" },
         { key: "demo",        perms: ROLE_PRESETS.demo,  labelAr: "تجريبي",       labelEn: "Demo" },
       ];
+      // Employee presets become first-class system roles: each one is a
+      // distinct row keyed by its preset id (e.g. "accountant"). Linking
+      // an employee to it via users.role_id is now the only way to grant
+      // them a custom permission set.
+      for (const [key, def] of Object.entries(EMPLOYEE_PRESETS)) {
+        presets.push({ key, perms: def.permissions, labelAr: def.labelAr, labelEn: def.labelEn });
+      }
       for (const r of presets) {
         await client.query(
-          `update roles
-             set permissions = $2::jsonb,
-                 label_ar = $3,
-                 label_en = $4,
-                 is_system = true,
-                 updated_at = now()
-           where key = $1 and company_id is null`,
+          `insert into roles (key, label_ar, label_en, permissions, is_system, company_id)
+                 values ($1, $3, $4, $2::jsonb, true, null)
+           on conflict (key) where company_id is null do update set
+             permissions = excluded.permissions,
+             label_ar    = excluded.label_ar,
+             label_en    = excluded.label_en,
+             is_system   = true,
+             updated_at  = now()`,
           [r.key, JSON.stringify(r.perms), r.labelAr, r.labelEn],
         );
       }

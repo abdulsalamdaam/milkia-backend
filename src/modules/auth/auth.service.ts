@@ -3,13 +3,13 @@ import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
 import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
-import { emailOtpTokensTable, loginLogsTable, tenantsTable, usersTable } from "@milkia/database";
+import { companiesTable, emailOtpTokensTable, loginLogsTable, rolesTable, tenantsTable, usersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { TwilioVerifyService } from "../twilio/twilio-verify.service";
 import { EmailService } from "../email/email.service";
-import { effectivePermissions, ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
+import { ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
 
 const MAX_FAILED = 5;
 /** Email-OTP code lifetime — short enough to be safe, long enough for the user to switch back to the app. */
@@ -145,7 +145,19 @@ export class AuthService {
     const email = (input.email || "").trim().toLowerCase();
     if (!email) throw new BadRequestException("البريد الإلكتروني مطلوب");
 
-    const [user] = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
+    // Join the role row so we know whether the user is an admin without
+    // selecting a now-removed `users.role` column.
+    const [user] = await this.db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        isActive: usersTable.isActive,
+        accountStatus: usersTable.accountStatus,
+        roleKey: rolesTable.key,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
 
     // Even when the user doesn't exist we still respond with success and
     // do nothing — this prevents email-enumeration attacks.
@@ -155,8 +167,8 @@ export class AuthService {
 
     // Mirror the password-flow account-status checks so suspended users
     // can't bypass moderation by switching to email OTP.
-    const adminRoles = new Set(["super_admin", "admin"]);
-    if (!adminRoles.has(user.role)) {
+    const isAdminRole = user.roleKey === "super_admin" || user.roleKey === "admin";
+    if (!isAdminRole) {
       if (user.accountStatus === "pending") {
         throw new ForbiddenException({ error: "حسابك قيد المراجعة، يرجى انتظار موافقة المشرف", code: "PENDING" });
       }
@@ -229,7 +241,28 @@ export class AuthService {
       .set({ consumedAt: now })
       .where(eq(emailOtpTokensTable.id, token.id));
 
-    const [user] = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
+    // Pull the user joined with their role + company so the response carries
+    // both. Neither `role` nor `company` exists on the users table anymore.
+    const [user] = await this.db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        name: usersTable.name,
+        isActive: usersTable.isActive,
+        accountStatus: usersTable.accountStatus,
+        phone: usersTable.phone,
+        loginCount: usersTable.loginCount,
+        tokenVersion: usersTable.tokenVersion,
+        createdAt: usersTable.createdAt,
+        companyId: usersTable.companyId,
+        roleId: usersTable.roleId,
+        roleKey: rolesTable.key,
+        companyName: companiesTable.name,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
+      .where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
     if (!user) {
       await this.recordLogin(null, email, "failed", ctx.ip, ctx.ua);
       throw new UnauthorizedException("الحساب غير موجود");
@@ -244,18 +277,21 @@ export class AuthService {
       .where(eq(usersTable.id, user.id));
     await this.recordLogin(user.id, user.email, "success", ctx.ip, ctx.ua);
 
-    const tokenStr = this.signUserToken({ id: user.id, email: user.email, role: user.role, tokenVersion: user.tokenVersion ?? 0 });
+    const roleKey = user.roleKey ?? "user";
+    const tokenStr = this.signUserToken({ id: user.id, email: user.email, role: roleKey, tokenVersion: user.tokenVersion ?? 0 });
     return {
       token: tokenStr,
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role,
+        role: roleKey,
         isActive: user.isActive,
         accountStatus: user.accountStatus,
         phone: user.phone,
-        company: user.company,
+        company: user.companyName,
+        companyId: user.companyId,
+        roleId: user.roleId,
         loginCount: (user.loginCount ?? 0) + 1,
         lastLoginAt: now,
         createdAt: user.createdAt,
@@ -272,14 +308,21 @@ export class AuthService {
    * set a real password via a future "set password" flow.
    */
   async register(input: { email: string; password?: string; name: string; phone?: string; company?: string }) {
-    const { email, password, name, phone, company } = input;
+    const { email, password, name, phone } = input;
     if (!email || !name) throw new BadRequestException("الاسم والبريد الإلكتروني مطلوبة");
 
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email.toLowerCase()), isNull(usersTable.deletedAt)));
     if (existing.length > 0) throw new BadRequestException("البريد الإلكتروني مسجّل مسبقاً");
 
-    // When no password is provided generate a long random one — the user
-    // never sees it, the row just has a non-empty hash.
+    // Resolve the system "user" role so we can link via role_id. The role
+    // row is seeded by the boot migration, so it always exists; this lookup
+    // protects against an unconfigured DB.
+    const [userRoleRow] = await this.db
+      .select({ id: rolesTable.id })
+      .from(rolesTable)
+      .where(and(eq(rolesTable.key, "user"), isNull(rolesTable.companyId)))
+      .limit(1);
+
     const effectivePassword = password && password.length >= 6
       ? password
       : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
@@ -288,11 +331,10 @@ export class AuthService {
       email: email.toLowerCase(),
       passwordHash,
       name,
-      role: "user",
       isActive: false,
       accountStatus: "pending",
       phone: phone ?? null,
-      company: company ?? null,
+      roleId: userRoleRow?.id ?? null,
     }).returning();
 
     void this.email.sendWelcome(user!.email, user!.name);
@@ -304,14 +346,26 @@ export class AuthService {
     };
   }
 
+  /**
+   * Permissions for the current user. Both the role key and the permission
+   * list come from the joined `roles` row — no per-user override anymore.
+   */
   async permissionsForUser(userId: number) {
-    const [user] = await this.db.select().from(usersTable).where(eq(usersTable.id, userId));
-    if (!user) throw new UnauthorizedException("User not found");
-    const perms = effectivePermissions(user.role as keyof typeof ROLE_PRESETS, user.permissions);
+    const [row] = await this.db
+      .select({
+        roleKey: rolesTable.key,
+        roleLabelAr: rolesTable.labelAr,
+        roleLabelEn: rolesTable.labelEn,
+        permissions: rolesTable.permissions,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .where(eq(usersTable.id, userId));
+    if (!row) throw new UnauthorizedException("User not found");
     return {
-      role: user.role,
-      roleLabel: user.roleLabel,
-      permissions: perms,
+      role: row.roleKey ?? "user",
+      roleLabel: row.roleLabelAr ?? row.roleLabelEn ?? null,
+      permissions: row.permissions ?? [],
       catalog: ALL_PERMISSIONS,
       presets: ROLE_PRESETS,
     };
@@ -319,20 +373,41 @@ export class AuthService {
 
   /* ── User: profile ── */
   async me(userId: number) {
-    const [user] = await this.db.select().from(usersTable).where(eq(usersTable.id, userId));
-    if (!user) throw new UnauthorizedException("User not found");
+    const [row] = await this.db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        name: usersTable.name,
+        isActive: usersTable.isActive,
+        accountStatus: usersTable.accountStatus,
+        phone: usersTable.phone,
+        loginCount: usersTable.loginCount,
+        lastLoginAt: usersTable.lastLoginAt,
+        createdAt: usersTable.createdAt,
+        companyId: usersTable.companyId,
+        roleId: usersTable.roleId,
+        roleKey: rolesTable.key,
+        companyName: companiesTable.name,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
+      .where(eq(usersTable.id, userId));
+    if (!row) throw new UnauthorizedException("User not found");
     return {
-      id: user.id,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      isActive: user.isActive,
-      accountStatus: user.accountStatus,
-      phone: user.phone,
-      company: user.company,
-      loginCount: user.loginCount,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      role: row.roleKey ?? "user",
+      isActive: row.isActive,
+      accountStatus: row.accountStatus,
+      phone: row.phone,
+      company: row.companyName,
+      companyId: row.companyId,
+      roleId: row.roleId,
+      loginCount: row.loginCount,
+      lastLoginAt: row.lastLoginAt,
+      createdAt: row.createdAt,
     };
   }
 

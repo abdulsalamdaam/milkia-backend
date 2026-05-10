@@ -33,10 +33,10 @@ WHERE NOT EXISTS (SELECT 1 FROM companies c WHERE c.name = v.name);
 WITH role_user AS (
   SELECT id FROM roles WHERE key = 'user' AND company_id IS NULL LIMIT 1
 )
-INSERT INTO users (email, password_hash, name, role, is_active, account_status, phone, company_id, role_id)
+INSERT INTO users (email, password_hash, name, is_active, account_status, phone, company_id, role_id)
 SELECT v.email,
        '$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy', -- placeholder; OTP login
-       v.name, 'user'::user_role, true, 'active', v.phone,
+       v.name, true, 'active', v.phone,
        (SELECT c.id FROM companies c WHERE c.name = v.company_name LIMIT 1),
        (SELECT id FROM role_user)
 FROM (VALUES

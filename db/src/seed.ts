@@ -1,12 +1,28 @@
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
-import { db, usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable } from "./index";
+import { and, eq, isNull } from "drizzle-orm";
+import { db, usersTable, rolesTable, propertiesTable, unitsTable, contractsTable, paymentsTable } from "./index";
+
+async function findRoleId(key: string): Promise<number | null> {
+  const [r] = await db
+    .select({ id: rolesTable.id })
+    .from(rolesTable)
+    .where(and(eq(rolesTable.key, key), isNull(rolesTable.companyId)))
+    .limit(1);
+  return r?.id ?? null;
+}
 
 async function seed() {
   console.log("Starting seed...");
 
   const adminEmail = "admin@platform.com";
   const demoEmail = "demo@platform.com";
+
+  const superAdminRoleId = await findRoleId("super_admin");
+  const demoRoleId = await findRoleId("demo");
+  if (!superAdminRoleId || !demoRoleId) {
+    console.error("System roles missing — run the boot migration first (start the API once).");
+    process.exit(1);
+  }
 
   const existingAdmin = await db.select().from(usersTable).where(eq(usersTable.email, adminEmail));
   if (existingAdmin.length === 0) {
@@ -15,9 +31,9 @@ async function seed() {
       email: adminEmail,
       passwordHash: adminHash,
       name: "مدير المنصة",
-      role: "super_admin",
       isActive: true,
       accountStatus: "active",
+      roleId: superAdminRoleId,
     });
     console.log("Admin created: admin@platform.com / admin123");
   } else {
@@ -33,9 +49,9 @@ async function seed() {
       email: demoEmail,
       passwordHash: demoHash,
       name: "مستخدم تجريبي",
-      role: "demo",
       isActive: true,
       accountStatus: "active",
+      roleId: demoRoleId,
     }).returning();
     demoUserId = demoUser!.id;
     console.log("Demo created: demo@platform.com / demo123");

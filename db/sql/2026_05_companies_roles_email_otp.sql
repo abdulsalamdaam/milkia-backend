@@ -121,46 +121,55 @@ VALUES
 ON CONFLICT (key) WHERE company_id IS NULL DO NOTHING;
 
 -- 5. Backfill companies from legacy user fields ─────────────────────
--- One company per top-level user (ownerUserId IS NULL). Employees inherit
--- the same company_id from their owning user via the second statement.
+-- Wrapped in a column-exists guard so the migration is safe to re-run
+-- after the drop_legacy_user_columns.sql migration has already removed
+-- these fields. Postgres still parses the SQL referencing missing columns
+-- inside the IF branch, so we use dynamic EXECUTE.
 
-INSERT INTO companies (name, commercial_reg, vat_number, official_email, company_phone, website, city, address, logo_key)
-SELECT
-  COALESCE(NULLIF(u.company, ''), u.name)        AS name,
-  u.commercial_reg, u.vat_number, u.official_email, u.company_phone,
-  u.website, u.city, u.address, u.logo_url
-FROM users u
-WHERE u.deleted_at IS NULL
-  AND u.owner_user_id IS NULL
-  AND u.company_id IS NULL
-  AND u.role IN ('user', 'admin', 'super_admin', 'demo')
-  AND (u.company IS NOT NULL OR u.commercial_reg IS NOT NULL OR u.vat_number IS NOT NULL);
+DO $do$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'users' AND column_name = 'role'
+  ) THEN
+    EXECUTE $migrate$
+      INSERT INTO companies (name, commercial_reg, vat_number, official_email, company_phone, website, city, address, logo_key)
+      SELECT
+        COALESCE(NULLIF(u.company, ''), u.name)        AS name,
+        u.commercial_reg, u.vat_number, u.official_email, u.company_phone,
+        u.website, u.city, u.address, u.logo_url
+      FROM users u
+      WHERE u.deleted_at IS NULL
+        AND u.owner_user_id IS NULL
+        AND u.company_id IS NULL
+        AND u.role IN ('user', 'admin', 'super_admin', 'demo')
+        AND (u.company IS NOT NULL OR u.commercial_reg IS NOT NULL OR u.vat_number IS NOT NULL);
 
--- Link top-level users to the company we just created.
-UPDATE users u
-SET company_id = c.id
-FROM companies c
-WHERE u.company_id IS NULL
-  AND u.owner_user_id IS NULL
-  AND c.deleted_at IS NULL
-  AND COALESCE(NULLIF(u.company, ''), u.name) = c.name
-  AND COALESCE(u.commercial_reg, '') = COALESCE(c.commercial_reg, '')
-  AND COALESCE(u.vat_number, '')     = COALESCE(c.vat_number, '');
+      UPDATE users u
+      SET company_id = c.id
+      FROM companies c
+      WHERE u.company_id IS NULL
+        AND u.owner_user_id IS NULL
+        AND c.deleted_at IS NULL
+        AND COALESCE(NULLIF(u.company, ''), u.name) = c.name
+        AND COALESCE(u.commercial_reg, '') = COALESCE(c.commercial_reg, '')
+        AND COALESCE(u.vat_number, '')     = COALESCE(c.vat_number, '');
 
--- Inherit company_id for employees (rows where owner_user_id is set).
-UPDATE users e
-SET company_id = parent.company_id
-FROM users parent
-WHERE e.company_id IS NULL
-  AND e.owner_user_id = parent.id
-  AND parent.company_id IS NOT NULL;
+      UPDATE users e
+      SET company_id = parent.company_id
+      FROM users parent
+      WHERE e.company_id IS NULL
+        AND e.owner_user_id = parent.id
+        AND parent.company_id IS NOT NULL;
 
--- 6. Link users to roles via legacy `role` enum ─────────────────────
-
-UPDATE users u
-SET role_id = r.id
-FROM roles r
-WHERE u.role_id IS NULL
-  AND r.is_system = true
-  AND r.company_id IS NULL
-  AND r.key = u.role::text;
+      UPDATE users u
+      SET role_id = r.id
+      FROM roles r
+      WHERE u.role_id IS NULL
+        AND r.is_system = true
+        AND r.company_id IS NULL
+        AND r.key = u.role::text;
+    $migrate$;
+  END IF;
+END;
+$do$;

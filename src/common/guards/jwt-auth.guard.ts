@@ -5,13 +5,23 @@ import { and, eq, isNull } from "drizzle-orm";
 import { rolesTable, usersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
+/**
+ * `role` is the role *key* string (e.g. "super_admin", "admin", "user",
+ * "demo", "accountant") sourced from the joined `roles` row. The four
+ * system role keys still appear here, but custom company-scoped roles can
+ * use any string key — RolesGuard / SuperAdminGuard / AdminGuard only
+ * recognize the system tier keys.
+ *
+ * `permissions` is sourced from `roles.permissions` at request time so a
+ * permission change to a role takes effect on the next request, no
+ * re-login required.
+ */
 export type AuthUser = {
   id: number;
   email: string;
-  role: "super_admin" | "admin" | "user" | "demo";
+  role: string;
   kind?: "user";
   tv?: number;
-  /** Populated by JwtAuthGuard from the DB at request time, NOT from the token. */
   permissions?: string[] | null;
   ownerUserId?: number | null;
   companyId?: number | null;
@@ -38,40 +48,35 @@ export class JwtAuthGuard implements CanActivate {
     }
     if (decoded.kind && decoded.kind !== "user") throw new UnauthorizedException("Invalid token kind");
 
-    // Load the user joined with their assigned role row so permissions are
-    // sourced from `roles.permissions` when present. The legacy
-    // `users.permissions` jsonb still wins when set (allows per-user
-    // overrides during the migration window).
-    const [user] = await this.db
+    // Single round-trip: user row + linked role row. Role key + permissions
+    // come exclusively from the roles table — there is no longer a per-user
+    // permission override.
+    const [row] = await this.db
       .select({
         id: usersTable.id,
         tokenVersion: usersTable.tokenVersion,
         isActive: usersTable.isActive,
-        permissions: usersTable.permissions,
         ownerUserId: usersTable.ownerUserId,
         companyId: usersTable.companyId,
         roleId: usersTable.roleId,
-        role: usersTable.role,
+        roleKey: rolesTable.key,
         rolePermissions: rolesTable.permissions,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(eq(usersTable.id, decoded.id), isNull(usersTable.deletedAt)));
-    if (!user) throw new UnauthorizedException("User not found");
-    if (!user.isActive) throw new UnauthorizedException("Account disabled");
-    if ((decoded.tv ?? 0) !== (user.tokenVersion ?? 0)) {
+    if (!row) throw new UnauthorizedException("User not found");
+    if (!row.isActive) throw new UnauthorizedException("Account disabled");
+    if ((decoded.tv ?? 0) !== (row.tokenVersion ?? 0)) {
       throw new UnauthorizedException("Session revoked. Please log in again.");
     }
-    // Per-user overrides win over role permissions. When neither is set the
-    // PermissionsGuard falls back to the static ROLE_PRESETS by role enum.
-    const effectivePerms = (user.permissions ?? null) ?? (user.rolePermissions ?? null);
     req.user = {
       ...decoded,
-      role: user.role as AuthUser["role"],
-      permissions: effectivePerms,
-      ownerUserId: user.ownerUserId ?? null,
-      companyId: user.companyId ?? null,
-      roleId: user.roleId ?? null,
+      role: row.roleKey ?? "user",
+      permissions: row.rolePermissions ?? [],
+      ownerUserId: row.ownerUserId ?? null,
+      companyId: row.companyId ?? null,
+      roleId: row.roleId ?? null,
     };
     return true;
   }

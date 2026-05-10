@@ -122,13 +122,8 @@ export class InvoicesController {
 
   private async buildRenderContext(user: AuthUser, id: number, lang?: "ar" | "en") {
     const { invoice, lines } = await this.invoices.getOneWithLines(scopeId(user), id);
-    // Prefer the linked companies row; fall back to the legacy logo/company
-    // columns on users while the migration window is open. Either way the
-    // invoice template only sees the resolved logo URL.
     const [row] = await this.db
       .select({
-        legacyLogoUrl: usersTable.logoUrl,
-        legacyCompany: usersTable.company,
         companyLogoKey: companiesTable.logoKey,
         companyName: companiesTable.name,
       })
@@ -139,7 +134,7 @@ export class InvoicesController {
       invoice,
       lines,
       language: lang ?? invoice.language ?? "ar",
-      brand: { logoUrl: row?.companyLogoKey ?? row?.legacyLogoUrl ?? null },
+      brand: { logoUrl: row?.companyLogoKey ?? null },
     } as const;
   }
 }

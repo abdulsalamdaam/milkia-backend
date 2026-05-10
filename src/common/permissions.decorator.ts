@@ -1,6 +1,6 @@
 import { CanActivate, ExecutionContext, ForbiddenException, Injectable, SetMetadata } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { effectivePermissions, ROLE_PRESETS, type Permission } from "./permissions";
+import type { Permission } from "./permissions";
 
 const PERMISSIONS_META = "milkia:required-permissions";
 
@@ -13,7 +13,9 @@ const PERMISSIONS_META = "milkia:required-permissions";
  *   @Post()
  *   create(...) { ... }
  *
- * super_admin and admin always pass — they have ALL_PERMISSIONS via ROLE_PRESETS.
+ * Permissions come from `req.user.permissions`, populated by JwtAuthGuard
+ * from the joined `roles.permissions` row. Roles are now first-class — to
+ * grant a permission, edit (or assign) the user's role row.
  */
 export const RequirePermissions = (...perms: Permission[]) =>
   SetMetadata(PERMISSIONS_META, perms);
@@ -33,8 +35,7 @@ export class PermissionsGuard implements CanActivate {
     const user = req.user;
     if (!user) throw new ForbiddenException("Authentication required");
 
-    const role = (user.role ?? "user") as keyof typeof ROLE_PRESETS;
-    const granted = effectivePermissions(role, user.permissions ?? null);
+    const granted = user.permissions ?? [];
     const missing = required.filter((p) => !granted.includes(p));
     if (missing.length) {
       throw new ForbiddenException(`Missing permissions: ${missing.join(", ")}`);

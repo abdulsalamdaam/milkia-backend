@@ -7,10 +7,9 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
-import { eq, and, isNotNull, isNull } from "drizzle-orm";
-import { usersTable, type User } from "@milkia/database";
+import { eq, and, asc, isNotNull, isNull } from "drizzle-orm";
+import { rolesTable, usersTable, type User } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
-import { EMPLOYEE_PRESETS, type Permission } from "../../common/permissions";
 
 type Public = Omit<User, "passwordHash">;
 
@@ -19,6 +18,20 @@ function strip(u: User): Public {
   return rest;
 }
 
+/**
+ * Team management.
+ *
+ * The legacy approach stored a copy of the role permissions on each user
+ * row (`users.permissions`). Now every user is linked to a `roles` row by
+ * `role_id` and the role row is the source of truth for permissions +
+ * label. To grant an employee a different permission set, point them at a
+ * different role.
+ *
+ * The five built-in employee presets (general / accountant / propertyManager
+ * / collector / assistant) are seeded as system roles by the boot migration
+ * — `rolePresets()` reads them straight from the DB so adding a new preset
+ * is a one-line SQL change.
+ */
 @Injectable()
 export class TeamService {
   constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
@@ -28,6 +41,16 @@ export class TeamService {
     if (actor.ownerUserId) {
       throw new ForbiddenException("Employees cannot manage team members");
     }
+  }
+
+  private async resolveRoleId(presetKey: string | undefined | null, fallbackKey = "user"): Promise<number | null> {
+    const key = presetKey?.trim() || fallbackKey;
+    const [r] = await this.db
+      .select({ id: rolesTable.id })
+      .from(rolesTable)
+      .where(and(eq(rolesTable.key, key), isNull(rolesTable.companyId)))
+      .limit(1);
+    return r?.id ?? null;
   }
 
   async listEmployees(actorId: number): Promise<Public[]> {
@@ -48,7 +71,7 @@ export class TeamService {
 
   async createEmployee(
     actorId: number,
-    input: { name: string; email: string; phone?: string; password: string; preset?: string; permissions?: string[]; roleLabel?: string },
+    input: { name: string; email: string; phone?: string; password: string; preset?: string },
   ): Promise<Public> {
     const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
     if (!actor) throw new NotFoundException("Actor not found");
@@ -61,16 +84,8 @@ export class TeamService {
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
     if (existing.length) throw new ConflictException("A user with this email already exists");
 
-    let permissions: Permission[] | null = null;
-    let roleLabel = input.roleLabel ?? null;
-    if (input.preset && EMPLOYEE_PRESETS[input.preset]) {
-      const preset = EMPLOYEE_PRESETS[input.preset];
-      permissions = preset.permissions;
-      if (!roleLabel) roleLabel = preset.labelAr;
-    }
-    if (input.permissions && Array.isArray(input.permissions)) {
-      permissions = input.permissions as Permission[];
-    }
+    const roleId = await this.resolveRoleId(input.preset);
+    if (!roleId) throw new BadRequestException(`Unknown role preset: ${input.preset}`);
 
     const passwordHash = await bcrypt.hash(input.password, 10);
     const [created] = await this.db
@@ -79,13 +94,13 @@ export class TeamService {
         email,
         passwordHash,
         name: input.name.trim() || email.split("@")[0]!,
-        role: "user",
         isActive: true,
         accountStatus: "active",
         phone: input.phone?.trim() || null,
         ownerUserId: actorId,
-        permissions,
-        roleLabel,
+        // Inherit the owning user's company so employees see the same data scope.
+        companyId: actor.companyId ?? null,
+        roleId,
       })
       .returning();
     return strip(created!);
@@ -94,7 +109,7 @@ export class TeamService {
   async updateEmployee(
     actorId: number,
     employeeId: number,
-    patch: { name?: string; phone?: string; preset?: string; permissions?: string[]; roleLabel?: string; isActive?: boolean },
+    patch: { name?: string; phone?: string; preset?: string; isActive?: boolean },
   ): Promise<Public> {
     const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
     if (!actor) throw new NotFoundException("Actor not found");
@@ -107,13 +122,11 @@ export class TeamService {
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.phone !== undefined) updates.phone = patch.phone || null;
     if (patch.isActive !== undefined) updates.isActive = patch.isActive;
-    if (patch.roleLabel !== undefined) updates.roleLabel = patch.roleLabel || null;
-    if (patch.preset && EMPLOYEE_PRESETS[patch.preset]) {
-      const preset = EMPLOYEE_PRESETS[patch.preset];
-      updates.permissions = preset.permissions;
-      if (patch.roleLabel === undefined) updates.roleLabel = preset.labelAr;
+    if (patch.preset !== undefined) {
+      const roleId = await this.resolveRoleId(patch.preset);
+      if (!roleId) throw new BadRequestException(`Unknown role preset: ${patch.preset}`);
+      updates.roleId = roleId;
     }
-    if (patch.permissions !== undefined) updates.permissions = patch.permissions as Permission[];
 
     const [updated] = await this.db
       .update(usersTable)
@@ -159,12 +172,19 @@ export class TeamService {
     return { ok: true };
   }
 
-  rolePresets() {
-    return Object.entries(EMPLOYEE_PRESETS).map(([id, def]) => ({
-      id,
-      labelAr: def.labelAr,
-      labelEn: def.labelEn,
-      permissions: def.permissions,
-    }));
+  /** Returns the seeded employee-preset roles for the team UI dropdown. */
+  async rolePresets() {
+    const employeePresetKeys = ["general", "accountant", "propertyManager", "collector", "assistant"];
+    const rows = await this.db
+      .select({
+        id: rolesTable.key,
+        labelAr: rolesTable.labelAr,
+        labelEn: rolesTable.labelEn,
+        permissions: rolesTable.permissions,
+      })
+      .from(rolesTable)
+      .where(and(isNull(rolesTable.companyId)))
+      .orderBy(asc(rolesTable.id));
+    return rows.filter((r) => employeePresetKeys.includes(r.id));
   }
 }

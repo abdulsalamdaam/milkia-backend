@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { count, desc, eq, sql } from "drizzle-orm";
-import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable } from "@milkia/database";
+import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable, rolesTable, companiesTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { SuperAdminGuard } from "../../common/guards/roles.guard";
@@ -19,8 +19,18 @@ class AdminController {
 
   @Get("stats")
   async stats() {
-    const allUsers = await this.db.select().from(usersTable);
-    const companies = allUsers.filter(u => u.role === "user" || u.role === "demo");
+    // Join the role row so we filter by `roles.key` rather than the dropped
+    // `users.role` enum. "Companies" here = customer landlords (user/demo);
+    // internal team rows (super_admin/admin) are excluded.
+    const allUsers = await this.db
+      .select({
+        id: usersTable.id,
+        isActive: usersTable.isActive,
+        roleKey: rolesTable.key,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id));
+    const companies = allUsers.filter(u => u.roleKey === "user" || u.roleKey === "demo");
     const [totalProps] = await this.db.select({ count: count() }).from(propertiesTable);
     const [totalUnits] = await this.db.select({ count: count() }).from(unitsTable);
     const [totalContracts] = await this.db.select({ count: count() }).from(contractsTable);
@@ -74,8 +84,21 @@ class AdminController {
 
   @Get("companies")
   async companies() {
-    const allUsers = await this.db.select().from(usersTable);
-    const companies = allUsers.filter(u => u.role === "user" || u.role === "demo");
+    const rows = await this.db
+      .select({
+        id: usersTable.id,
+        name: usersTable.name,
+        email: usersTable.email,
+        isActive: usersTable.isActive,
+        phone: usersTable.phone,
+        createdAt: usersTable.createdAt,
+        roleKey: rolesTable.key,
+        companyName: companiesTable.name,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id));
+    const companies = rows.filter(u => u.roleKey === "user" || u.roleKey === "demo");
     return Promise.all(companies.map(async (user) => {
       const [propCount] = await this.db.select({ count: count() }).from(propertiesTable).where(eq(propertiesTable.userId, user.id));
       const [unitCount] = await this.db.select({ count: count() }).from(unitsTable)
@@ -84,12 +107,12 @@ class AdminController {
       const [contractCount] = await this.db.select({ count: count() }).from(contractsTable).where(eq(contractsTable.userId, user.id));
       return {
         id: user.id,
-        name: user.company || user.name,
+        name: user.companyName || user.name,
         email: user.email,
-        role: user.role,
+        role: user.roleKey,
         isActive: user.isActive,
         phone: user.phone,
-        plan: user.role === "demo" ? "تجريبي" : "مجاني",
+        plan: user.roleKey === "demo" ? "تجريبي" : "مجاني",
         propertiesCount: Number(propCount?.count ?? 0),
         unitsCount: Number(unitCount?.count ?? 0),
         contractsCount: Number(contractCount?.count ?? 0),
@@ -125,18 +148,35 @@ class AdminController {
    */
   @Get("users")
   async users() {
-    const allUsers = await this.db.select().from(usersTable).orderBy(usersTable.createdAt);
-    const teamOnly = allUsers.filter(u => u.role === "super_admin" || u.role === "admin");
+    const rows = await this.db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        name: usersTable.name,
+        isActive: usersTable.isActive,
+        phone: usersTable.phone,
+        loginCount: usersTable.loginCount,
+        lastLoginAt: usersTable.lastLoginAt,
+        failedLoginAttempts: usersTable.failedLoginAttempts,
+        createdAt: usersTable.createdAt,
+        roleKey: rolesTable.key,
+        companyName: companiesTable.name,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
+      .orderBy(usersTable.createdAt);
+    const teamOnly = rows.filter(u => u.roleKey === "super_admin" || u.roleKey === "admin");
     return Promise.all(teamOnly.map(async (user) => {
       const [propCount] = await this.db.select({ count: count() }).from(propertiesTable).where(eq(propertiesTable.userId, user.id));
       return {
         id: user.id,
         email: user.email,
         name: user.name,
-        role: user.role,
+        role: user.roleKey,
         isActive: user.isActive,
         phone: user.phone,
-        company: user.company,
+        company: user.companyName,
         propertiesCount: Number(propCount?.count ?? 0),
         loginCount: user.loginCount ?? 0,
         lastLoginAt: user.lastLoginAt,
@@ -242,15 +282,30 @@ class AdminController {
     if (id === admin.id) throw new BadRequestException("لا يمكن تعديل حسابك الخاص");
     const updateData: Record<string, unknown> = {};
     if (body.isActive !== undefined) updateData.isActive = body.isActive;
-    if (body.role !== undefined) updateData.role = body.role;
-    if (body.roleLabel !== undefined) updateData.roleLabel = body.roleLabel;
     if (body.name !== undefined) updateData.name = body.name;
-    if (body.permissions !== undefined) {
-      updateData.permissions = body.permissions === null ? null : (Array.isArray(body.permissions) ? body.permissions : null);
+
+    // Role assignment is by role *key* (e.g. "user", "admin", "accountant")
+    // — we look up the system role row and link via role_id. The legacy
+    // role/roleLabel/permissions columns no longer exist on users.
+    if (body.role !== undefined && typeof body.role === "string") {
+      const [r] = await this.db.select({ id: rolesTable.id })
+        .from(rolesTable)
+        .where(and(eq(rolesTable.key, body.role), isNull(rolesTable.companyId)))
+        .limit(1);
+      if (!r) throw new BadRequestException(`Unknown role: ${body.role}`);
+      updateData.roleId = r.id;
     }
+
     const [user] = await this.db.update(usersTable).set(updateData).where(eq(usersTable.id, id)).returning();
     if (!user) throw new NotFoundException("Not found");
-    return { id: user.id, isActive: user.isActive, role: user.role, roleLabel: user.roleLabel, permissions: user.permissions };
+    const [r] = user.roleId ? await this.db.select({ key: rolesTable.key, labelAr: rolesTable.labelAr, permissions: rolesTable.permissions }).from(rolesTable).where(eq(rolesTable.id, user.roleId)) : [null];
+    return {
+      id: user.id,
+      isActive: user.isActive,
+      role: r?.key ?? null,
+      roleLabel: r?.labelAr ?? null,
+      permissions: r?.permissions ?? [],
+    };
   }
 
   @Get("permissions/catalog")
@@ -270,16 +325,31 @@ class AdminController {
   @Get("registrations")
   async registrations(@Query("status") statusQ?: string) {
     const status = statusQ || "all";
-    let users = await this.db.select().from(usersTable).orderBy(usersTable.createdAt);
-    users = users.filter(u => u.role === "user");
-    if (status !== "all") users = users.filter(u => u.accountStatus === status);
-    return users.map(u => ({
+    let rows = await this.db
+      .select({
+        id: usersTable.id,
+        name: usersTable.name,
+        email: usersTable.email,
+        phone: usersTable.phone,
+        accountStatus: usersTable.accountStatus,
+        isActive: usersTable.isActive,
+        createdAt: usersTable.createdAt,
+        roleKey: rolesTable.key,
+        companyName: companiesTable.name,
+      })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
+      .orderBy(usersTable.createdAt);
+    rows = rows.filter(u => u.roleKey === "user");
+    if (status !== "all") rows = rows.filter(u => u.accountStatus === status);
+    return rows.map(u => ({
       id: u.id,
       name: u.name,
       email: u.email,
       phone: u.phone,
-      company: u.company,
-      role: u.role,
+      company: u.companyName,
+      role: u.roleKey,
       accountStatus: u.accountStatus,
       isActive: u.isActive,
       createdAt: u.createdAt,
@@ -288,8 +358,11 @@ class AdminController {
 
   @Get("registrations/pending-count")
   async pendingCount() {
-    const users = await this.db.select().from(usersTable);
-    const c = users.filter(u => u.role === "user" && u.accountStatus === "pending").length;
+    const rows = await this.db
+      .select({ accountStatus: usersTable.accountStatus, roleKey: rolesTable.key })
+      .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id));
+    const c = rows.filter(u => u.roleKey === "user" && u.accountStatus === "pending").length;
     return { count: c };
   }
 
