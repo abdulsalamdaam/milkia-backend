@@ -2,6 +2,7 @@ import {
   BadRequestException, Body, Controller, Delete, Get, Header, Inject,
   NotFoundException, Param, ParseIntPipe, Post, Query, Res, UseGuards,
 } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import type { Response } from "express";
 import { eq, and, isNull } from "drizzle-orm";
 import { usersTable } from "@milkia/database";
@@ -15,6 +16,8 @@ import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { InvoiceService, type CreateInvoiceDto } from "./services/invoice.service";
 import { PdfService } from "./services/pdf.service";
 
+@ApiTags("invoices")
+@ApiBearerAuth("user-jwt")
 @Controller("invoices")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class InvoicesController {

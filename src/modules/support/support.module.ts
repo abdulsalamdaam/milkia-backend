@@ -1,4 +1,5 @@
 import { Body, Controller, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { desc, eq } from "drizzle-orm";
 import { supportTicketsTable, supportMessagesTable, usersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -8,6 +9,8 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 
+@ApiTags("support")
+@ApiBearerAuth("user-jwt")
 @Controller("support/tickets")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class SupportController {

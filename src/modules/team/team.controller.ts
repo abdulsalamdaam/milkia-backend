@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, ParseIntPipe, Patch, Post, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
@@ -24,6 +25,8 @@ class UpdateEmployeeDto {
   @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
+@ApiTags("team")
+@ApiBearerAuth("user-jwt")
 @Controller("team")
 @UseGuards(JwtAuthGuard)
 export class TeamController {

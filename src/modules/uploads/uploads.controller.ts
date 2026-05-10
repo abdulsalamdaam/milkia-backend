@@ -1,6 +1,7 @@
 /// <reference types="multer" />
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Post, Query, UploadedFile, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FileInterceptor } from "@nestjs/platform-express";
+import { ApiTags, ApiBearerAuth, ApiConsumes, ApiBody } from "@nestjs/swagger";
 import { IsOptional, IsString, MaxLength } from "class-validator";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { UploadsService } from "./uploads.service";
@@ -27,12 +28,25 @@ class PresignPutDto {
  * attachments). New file-handling code should NOT touch the S3 SDK directly
  * — go through UploadsService instead.
  */
+@ApiTags("uploads")
+@ApiBearerAuth("user-jwt")
 @Controller("uploads")
 @UseGuards(JwtAuthGuard)
 export class UploadsController {
   constructor(private readonly uploads: UploadsService) {}
 
   @Post()
+  @ApiConsumes("multipart/form-data")
+  @ApiBody({
+    schema: {
+      type: "object",
+      properties: {
+        file: { type: "string", format: "binary" },
+        folder: { type: "string", description: "Optional folder prefix inside the bucket" },
+      },
+      required: ["file"],
+    },
+  })
   @UseInterceptors(FileInterceptor("file"))
   async upload(
     @UploadedFile() file: Express.Multer.File,

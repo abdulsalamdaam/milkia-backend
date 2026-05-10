@@ -1,8 +1,10 @@
 import { Controller, Get, Inject, Module } from "@nestjs/common";
+import { ApiTags } from "@nestjs/swagger";
 import { count } from "drizzle-orm";
 import { usersTable, propertiesTable, unitsTable, contractsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
+@ApiTags("stats")
 @Controller("stats")
 class StatsController {
   constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}

@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull } from "drizzle-orm";
 import { facilitiesTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -11,6 +12,8 @@ import { scopeId } from "../../common/scope";
 
 const FIELDS = ["name", "propertyName", "type", "status", "lastMaintenance", "nextMaintenance", "monthlyOpex", "notes"] as const;
 
+@ApiTags("facilities")
+@ApiBearerAuth("user-jwt")
 @Controller("facilities")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class FacilitiesController {

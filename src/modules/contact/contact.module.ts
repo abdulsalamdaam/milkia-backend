@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Get, HttpCode, Inject, Module, NotFoundException, Param, Patch, Post, Query, Req, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
 import { IsEmail, IsIn, IsOptional, IsString, MaxLength, MinLength } from "class-validator";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -50,6 +51,7 @@ class UpdateContactDto {
 }
 
 /* ── Public submit (rate-limited per IP+identifier) ─────────────── */
+@ApiTags("contact")
 @Controller("public/contact")
 class PublicContactController {
   constructor(
@@ -103,6 +105,8 @@ class PublicContactController {
 }
 
 /* ── Admin tracking ─────────────────────────────────────────────── */
+@ApiTags("admin")
+@ApiBearerAuth("user-jwt")
 @Controller("admin/contact-submissions")
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 class AdminContactController {

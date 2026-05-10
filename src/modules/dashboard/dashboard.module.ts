@@ -1,4 +1,5 @@
 import { Controller, Get, Inject, Module, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { eq, count } from "drizzle-orm";
 import { propertiesTable, unitsTable, contractsTable, paymentsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -6,6 +7,8 @@ import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 
+@ApiTags("dashboard")
+@ApiBearerAuth("user-jwt")
 @Controller("dashboard")
 @UseGuards(JwtAuthGuard)
 class DashboardController {

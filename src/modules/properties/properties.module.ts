@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull } from "drizzle-orm";
 import { propertiesTable, unitsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -13,6 +14,8 @@ function scopeId(user: AuthUser): number {
   return user.ownerUserId ?? user.id;
 }
 
+@ApiTags("properties")
+@ApiBearerAuth("user-jwt")
 @Controller("properties")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class PropertiesController {

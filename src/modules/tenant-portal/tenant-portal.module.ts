@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Inject, Module, NotFoundException, Param, Post, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, IsString, MinLength } from "class-validator";
 import { Throttle } from "@nestjs/throttler";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -35,6 +36,8 @@ class DeleteAccountDto {
   reason?: string;
 }
 
+@ApiTags("tenant-portal")
+@ApiBearerAuth("tenant-jwt")
 @Controller("tenant/me")
 @UseGuards(TenantAuthGuard)
 export class TenantPortalController {

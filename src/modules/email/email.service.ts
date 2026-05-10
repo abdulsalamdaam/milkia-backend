@@ -106,6 +106,38 @@ export class EmailService {
     });
   }
 
+  /**
+   * Acknowledgment email back to the tenant (or whoever raised the request).
+   * Separate from sendMaintenanceCreated which targets the admin/landlord.
+   * No-op when `to` is empty — tenants without an email on file simply don't
+   * get notified (we do not throw).
+   */
+  async sendMaintenanceAcknowledgment(to: string, payload: MaintenanceEmailPayload): Promise<boolean> {
+    if (!to) return false;
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">تم استلام طلب الصيانة ✅</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        شكراً لتواصلك معنا. تم تسجيل طلب الصيانة الخاص بك (رقم <strong>#${payload.id}</strong>) وسيتم التواصل معك في أقرب وقت ممكن.
+      </p>
+      ${row("الوحدة", payload.unitLabel || "—")}
+      ${row("الأولوية", payload.priority || "medium")}
+      ${row("الحالة الحالية", payload.status || "open")}
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#64748b;font-size:12px;margin-bottom:6px;">تفاصيل طلبك</div>
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(payload.description)}</div>
+      </div>
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        هذه رسالة تأكيد تلقائية — لا حاجة للرد عليها.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: `تأكيد استلام طلب الصيانة #${payload.id}`,
+      html,
+      text: `تم استلام طلب الصيانة رقم #${payload.id}. سيتم التواصل معك قريباً.`,
+    });
+  }
+
   async sendMaintenanceCreated(payload: MaintenanceEmailPayload, to?: string): Promise<boolean> {
     const recipient = to || this.adminEmail;
     if (!recipient) {

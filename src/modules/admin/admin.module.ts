@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { count, desc, eq, sql } from "drizzle-orm";
 import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -9,6 +10,8 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { seedDemoData } from "./demo-seed";
 import { ALL_PERMISSIONS, ROLE_PRESETS } from "../../common/permissions";
 
+@ApiTags("admin")
+@ApiBearerAuth("user-jwt")
 @Controller("admin")
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 class AdminController {

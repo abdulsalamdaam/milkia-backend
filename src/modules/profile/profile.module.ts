@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Patch, BadRequestException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { eq } from "drizzle-orm";
 import { usersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -31,6 +32,8 @@ const EDITABLE_FIELDS = [
   "website", "city", "address", "logoUrl",
 ] as const;
 
+@ApiTags("profile")
+@ApiBearerAuth("user-jwt")
 @Controller("profile")
 @UseGuards(JwtAuthGuard)
 class ProfileController {

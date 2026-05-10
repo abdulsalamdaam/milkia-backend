@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { maintenanceRequestsTable, contractsTable, unitsTable, propertiesTable, tenantsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -12,6 +13,8 @@ import { EmailService } from "../email/email.service";
 
 const FIELDS = ["unitLabel", "description", "priority", "status", "supplier", "estimatedCost", "tenantId", "contractId"] as const;
 
+@ApiTags("maintenance")
+@ApiBearerAuth("user-jwt")
 @Controller("maintenance")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class MaintenanceController {
@@ -113,20 +116,32 @@ class MaintenanceController {
       estimatedCost: body.estimatedCost ? String(body.estimatedCost) : null,
     }).returning();
 
-    void this.notifyAdmin(row!);
+    void this.notifyOnCreate(row!);
 
     return row;
   }
 
-  private async notifyAdmin(row: typeof maintenanceRequestsTable.$inferSelect) {
+  /**
+   * Fan out two emails after a ticket is created:
+   *   - admin/landlord notification (always, to ADMIN_NOTIFY_EMAIL)
+   *   - tenant acknowledgment ("we received your request") — only when the
+   *     linked tenant has an email on file
+   * Both are best-effort; one failing must not block the other.
+   */
+  private async notifyOnCreate(row: typeof maintenanceRequestsTable.$inferSelect) {
     try {
       let tenantName: string | null = null;
       let tenantPhone: string | null = null;
+      let tenantEmail: string | null = null;
       let propertyName: string | null = null;
       if (row.tenantId) {
-        const [t] = await this.db.select({ name: tenantsTable.name, phone: tenantsTable.phone }).from(tenantsTable).where(eq(tenantsTable.id, row.tenantId));
+        const [t] = await this.db
+          .select({ name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email })
+          .from(tenantsTable)
+          .where(eq(tenantsTable.id, row.tenantId));
         tenantName = t?.name ?? null;
         tenantPhone = t?.phone ?? null;
+        tenantEmail = t?.email ?? null;
       }
       if (row.contractId) {
         const [p] = await this.db
@@ -137,7 +152,7 @@ class MaintenanceController {
           .where(eq(contractsTable.id, row.contractId));
         propertyName = p?.propertyName ?? null;
       }
-      await this.email.sendMaintenanceCreated({
+      const payload = {
         id: row.id,
         unitLabel: row.unitLabel,
         description: row.description,
@@ -146,9 +161,13 @@ class MaintenanceController {
         tenantName,
         tenantPhone,
         propertyName,
-      });
+      };
+      await Promise.allSettled([
+        this.email.sendMaintenanceCreated(payload),
+        tenantEmail ? this.email.sendMaintenanceAcknowledgment(tenantEmail, payload) : Promise.resolve(false),
+      ]);
     } catch (err) {
-      console.error("[maintenance] notifyAdmin failed:", err);
+      console.error("[maintenance] notifyOnCreate failed:", err);
     }
   }
 

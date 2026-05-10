@@ -1,6 +1,7 @@
 import {
   Body, Controller, Get, Post, UseGuards, BadRequestException,
 } from "@nestjs/common";
+import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -10,6 +11,8 @@ import { scopeId } from "../../common/scope";
 import { ZatcaOnboardingService, type SellerProfileInput } from "./services/zatca-onboarding.service";
 import type { ZatcaEnv } from "./services/zatca-api.service";
 
+@ApiTags("zatca")
+@ApiBearerAuth("user-jwt")
 @Controller("zatca")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ZatcaOnboardingController {
