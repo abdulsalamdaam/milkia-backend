@@ -83,6 +83,37 @@ export class EmailService {
 
   /* ── Templates ─────────────────────────────────────────────── */
 
+  /**
+   * One-time login code. Sent in both languages so the user sees both
+   * variants regardless of which app locale they're on.
+   */
+  async sendLoginOtp(to: string, code: string, ttlMinutes: number): Promise<boolean> {
+    if (!to) return false;
+    const safeCode = escapeHtml(code);
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">رمز الدخول · Login code</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        استخدم الرمز التالي لإكمال تسجيل الدخول. صالح لمدة ${ttlMinutes} دقيقة.<br/>
+        Use the code below to finish signing in. Valid for ${ttlMinutes} minutes.
+      </p>
+      <div style="margin:24px 0;text-align:center;">
+        <div style="display:inline-block;font-family:'SFMono-Regular',Menlo,monospace;font-size:32px;letter-spacing:8px;font-weight:700;color:#0f172a;padding:14px 28px;background:#f1f5f9;border-radius:12px;border:1px solid #e2e8f0;">
+          ${safeCode}
+        </div>
+      </div>
+      <p style="margin:0 0 6px;color:#64748b;font-size:13px;">
+        إذا لم تطلب هذا الرمز يمكنك تجاهل هذه الرسالة.<br/>
+        If you didn't request this code, ignore this email.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: `رمز الدخول · Milkia login code: ${code}`,
+      html,
+      text: `Your Milkia login code: ${code}\nValid for ${ttlMinutes} minutes.`,
+    });
+  }
+
   async sendWelcome(to: string, name: string): Promise<boolean> {
     if (!to) return false;
     const safeName = escapeHtml(name || "");

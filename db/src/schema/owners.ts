@@ -6,6 +6,13 @@ export const ownerStatusEnum = pgEnum("owner_status", ["active", "inactive"]);
 export const ownersTable = pgTable("owners", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
+  /**
+   * The company this owner/reseller is linked to. NULL during the migration
+   * window for legacy rows; new owners always carry this. The legacy `userId`
+   * is kept for data-scoping continuity (employees inherit their owner-user's
+   * scope) until we move scoping to companyId end-to-end.
+   */
+  companyId: integer("company_id"),
   name: text("name").notNull(),
   type: ownerTypeEnum("type").notNull().default("individual"),
   idNumber: text("id_number"),

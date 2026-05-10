@@ -1,4 +1,7 @@
 export * from "./users";
+export * from "./companies";
+export * from "./roles";
+export * from "./emailOtpTokens";
 export * from "./loginLogs";
 export * from "./properties";
 export * from "./units";

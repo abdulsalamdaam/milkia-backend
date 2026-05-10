@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, Inject, UnauthorizedExceptio
 import type { Request } from "express";
 import { JwtService } from "@nestjs/jwt";
 import { and, eq, isNull } from "drizzle-orm";
-import { usersTable } from "@milkia/database";
+import { rolesTable, usersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
 export type AuthUser = {
@@ -14,6 +14,8 @@ export type AuthUser = {
   /** Populated by JwtAuthGuard from the DB at request time, NOT from the token. */
   permissions?: string[] | null;
   ownerUserId?: number | null;
+  companyId?: number | null;
+  roleId?: number | null;
 };
 
 @Injectable()
@@ -36,6 +38,10 @@ export class JwtAuthGuard implements CanActivate {
     }
     if (decoded.kind && decoded.kind !== "user") throw new UnauthorizedException("Invalid token kind");
 
+    // Load the user joined with their assigned role row so permissions are
+    // sourced from `roles.permissions` when present. The legacy
+    // `users.permissions` jsonb still wins when set (allows per-user
+    // overrides during the migration window).
     const [user] = await this.db
       .select({
         id: usersTable.id,
@@ -43,22 +49,29 @@ export class JwtAuthGuard implements CanActivate {
         isActive: usersTable.isActive,
         permissions: usersTable.permissions,
         ownerUserId: usersTable.ownerUserId,
+        companyId: usersTable.companyId,
+        roleId: usersTable.roleId,
         role: usersTable.role,
+        rolePermissions: rolesTable.permissions,
       })
       .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(eq(usersTable.id, decoded.id), isNull(usersTable.deletedAt)));
     if (!user) throw new UnauthorizedException("User not found");
     if (!user.isActive) throw new UnauthorizedException("Account disabled");
     if ((decoded.tv ?? 0) !== (user.tokenVersion ?? 0)) {
       throw new UnauthorizedException("Session revoked. Please log in again.");
     }
-    // Attach freshly loaded permissions + role + owner-scope to req.user so
-    // downstream guards (PermissionsGuard) and controllers can use them.
+    // Per-user overrides win over role permissions. When neither is set the
+    // PermissionsGuard falls back to the static ROLE_PRESETS by role enum.
+    const effectivePerms = (user.permissions ?? null) ?? (user.rolePermissions ?? null);
     req.user = {
       ...decoded,
       role: user.role as AuthUser["role"],
-      permissions: user.permissions ?? null,
+      permissions: effectivePerms,
       ownerUserId: user.ownerUserId ?? null,
+      companyId: user.companyId ?? null,
+      roleId: user.roleId ?? null,
     };
     return true;
   }

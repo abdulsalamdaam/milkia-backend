@@ -5,7 +5,7 @@ import {
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import type { Response } from "express";
 import { eq, and, isNull } from "drizzle-orm";
-import { usersTable } from "@milkia/database";
+import { usersTable, companiesTable } from "@milkia/database";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -122,15 +122,24 @@ export class InvoicesController {
 
   private async buildRenderContext(user: AuthUser, id: number, lang?: "ar" | "en") {
     const { invoice, lines } = await this.invoices.getOneWithLines(scopeId(user), id);
-    const [u] = await this.db
-      .select({ logoUrl: usersTable.logoUrl, company: usersTable.company })
+    // Prefer the linked companies row; fall back to the legacy logo/company
+    // columns on users while the migration window is open. Either way the
+    // invoice template only sees the resolved logo URL.
+    const [row] = await this.db
+      .select({
+        legacyLogoUrl: usersTable.logoUrl,
+        legacyCompany: usersTable.company,
+        companyLogoKey: companiesTable.logoKey,
+        companyName: companiesTable.name,
+      })
       .from(usersTable)
+      .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
       .where(and(eq(usersTable.id, scopeId(user)), isNull(usersTable.deletedAt)));
     return {
       invoice,
       lines,
       language: lang ?? invoice.language ?? "ar",
-      brand: { logoUrl: u?.logoUrl ?? null },
+      brand: { logoUrl: row?.companyLogoKey ?? row?.legacyLogoUrl ?? null },
     } as const;
   }
 }

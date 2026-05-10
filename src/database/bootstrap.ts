@@ -25,9 +25,22 @@ function findSqlFile(name: string): string | null {
     join(__dirname, "..", "..", "..", "db", name),
     // Dev runtime: src/database/bootstrap.ts → ../../db/<name>
     join(__dirname, "..", "..", "db", name),
+    // Subdirectory variant for ad-hoc migrations under db/sql/<name>.
+    join(__dirname, "..", "..", "..", "db", "sql", name),
+    join(__dirname, "..", "..", "db", "sql", name),
   ];
   return candidates.find((p) => existsSync(p)) ?? null;
 }
+
+/**
+ * Idempotent migrations that should run on every boot. New additive changes
+ * (CREATE TABLE IF NOT EXISTS, ADD COLUMN IF NOT EXISTS, INSERT ... ON CONFLICT
+ * DO NOTHING) go here. Destructive migrations (DROP COLUMN, etc.) should be
+ * handled out of band.
+ */
+const PASSIVE_MIGRATIONS = [
+  "2026_05_companies_roles_email_otp.sql",
+];
 
 async function runSqlFile(client: any, label: string, file: string) {
   const sql = readFileSync(file, "utf8");
@@ -62,6 +75,49 @@ export async function ensureSchema(): Promise<void> {
         return;
       }
       await runSqlFile(client, "init.sql", initFile);
+    }
+
+    // Phase 1.5: passive migrations — additive, idempotent, run every boot.
+    for (const file of PASSIVE_MIGRATIONS) {
+      const path = findSqlFile(file);
+      if (!path) {
+        log.warn(`migration ${file} not found — skipped`);
+        continue;
+      }
+      try {
+        await runSqlFile(client, `migration ${file}`, path);
+      } catch (err: any) {
+        log.error(`migration ${file} failed: ${err?.message || err}`);
+        throw err;
+      }
+    }
+
+    // Phase 1.6: refresh system role permissions on every boot. Keeps the
+    // roles table in sync with code-side ROLE_PRESETS without requiring a
+    // hand-written migration each time we add a permission.
+    try {
+      const { ROLE_PRESETS, ALL_PERMISSIONS } = await import("../common/permissions");
+      const presets: Array<{ key: string; perms: readonly string[]; labelAr: string; labelEn: string }> = [
+        { key: "super_admin", perms: ALL_PERMISSIONS, labelAr: "مدير النظام", labelEn: "Super Admin" },
+        { key: "admin",       perms: ROLE_PRESETS.admin, labelAr: "مشرف",         labelEn: "Admin" },
+        { key: "user",        perms: ROLE_PRESETS.user,  labelAr: "مالك / مدير",  labelEn: "Owner / Manager" },
+        { key: "demo",        perms: ROLE_PRESETS.demo,  labelAr: "تجريبي",       labelEn: "Demo" },
+      ];
+      for (const r of presets) {
+        await client.query(
+          `update roles
+             set permissions = $2::jsonb,
+                 label_ar = $3,
+                 label_en = $4,
+                 is_system = true,
+                 updated_at = now()
+           where key = $1 and company_id is null`,
+          [r.key, JSON.stringify(r.perms), r.labelAr, r.labelEn],
+        );
+      }
+      log.log("System role presets refreshed ✓");
+    } catch (err: any) {
+      log.warn(`role refresh skipped: ${err?.message || err}`);
     }
 
     // Phase 2: seed data (only if users-table is empty and data.sql exists)

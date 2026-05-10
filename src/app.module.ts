@@ -27,6 +27,7 @@ import { TenantPortalModule } from "./modules/tenant-portal/tenant-portal.module
 import { ContactModule } from "./modules/contact/contact.module";
 import { TeamModule } from "./modules/team/team.module";
 import { InvoiceModule } from "./modules/invoice/invoice.module";
+import { CompaniesModule } from "./modules/companies/companies.module";
 
 @Module({
   imports: [
@@ -64,6 +65,7 @@ import { InvoiceModule } from "./modules/invoice/invoice.module";
     ContactModule,
     TeamModule,
     InvoiceModule,
+    CompaniesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: ThrottlerGuard },

@@ -1,4 +1,4 @@
-import { IsEmail, IsIn, IsOptional, IsString, MinLength } from "class-validator";
+import { IsEmail, IsIn, IsOptional, IsString, Length, MinLength } from "class-validator";
 
 export class LoginDto {
   @IsEmail()
@@ -8,6 +8,22 @@ export class LoginDto {
   password!: string;
 }
 
+/* ── Email-OTP login (current primary auth) ─────────────────────── */
+
+export class EmailOtpRequestDto {
+  @IsEmail()
+  email!: string;
+}
+
+export class EmailOtpVerifyDto {
+  @IsEmail()
+  email!: string;
+
+  @IsString()
+  @Length(6, 6)
+  code!: string;
+}
+
 export class RegisterDto {
   @IsString()
   name!: string;
@@ -15,9 +31,14 @@ export class RegisterDto {
   @IsEmail()
   email!: string;
 
+  /**
+   * Password is optional. We're currently passwordless (email-OTP); when a
+   * password isn't provided the backend stores an unguessable random hash.
+   */
+  @IsOptional()
   @IsString()
   @MinLength(6)
-  password!: string;
+  password?: string;
 
   @IsOptional()
   @IsString()

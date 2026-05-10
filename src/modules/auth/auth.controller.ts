@@ -17,6 +17,8 @@ import {
   ResetPasswordDto,
   TenantOtpStartDto,
   TenantOtpVerifyDto,
+  EmailOtpRequestDto,
+  EmailOtpVerifyDto,
 } from "./auth.dto";
 
 function clientCtx(req: Request) {
@@ -32,13 +34,37 @@ function clientCtx(req: Request) {
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
-  /* ── User: standard email/password ── */
-  // 10 attempts per minute per IP+email — defends against credential stuffing.
+  /* ── User: password login (DISABLED, kept for re-enable) ──────── */
+  // Hits AuthService.login which currently throws — the route stays mounted
+  // so a frontend that hasn't migrated yet receives a clear 400 instead of
+  // a silent 404. To re-enable: uncomment the body in AuthService.login.
   @Post("login")
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @UseGuards(OtpThrottlerGuard)
   login(@Body() body: LoginDto, @Req() req: Request) {
     return this.auth.login(body, clientCtx(req));
+  }
+
+  /* ── User: email-OTP login (current primary) ──────────────────── */
+  // Send a 6-digit code to the user's email. 1/min and 5/hour per (IP+email).
+  @Post("email-otp/request")
+  @HttpCode(200)
+  @Throttle({
+    short: { limit: 1, ttl: 60_000 },
+    long:  { limit: 5, ttl: 3600_000 },
+  })
+  @UseGuards(OtpThrottlerGuard)
+  emailOtpRequest(@Body() body: EmailOtpRequestDto, @Req() req: Request) {
+    return this.auth.requestEmailOtp(body, clientCtx(req));
+  }
+
+  // Verify the code and issue a JWT. 5 attempts per 5 min per (IP+email).
+  @Post("email-otp/verify")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 300_000 } })
+  @UseGuards(OtpThrottlerGuard)
+  emailOtpVerify(@Body() body: EmailOtpVerifyDto, @Req() req: Request) {
+    return this.auth.verifyEmailOtp(body, clientCtx(req));
   }
 
   // Registration is cheap but still rate-limited per IP.
