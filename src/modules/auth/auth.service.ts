@@ -472,25 +472,12 @@ export class AuthService {
 
   /* ── Tenant: phone OTP login ──
    *
-   * SMS sending is currently DISABLED while the team is testing builds.
-   * The mobile client can complete the login flow by entering the fixed
-   * bypass code (default "1234"). Twilio Verify is kept wired up so we
-   * can flip it back on without code changes — set the env var to undo:
-   *
-   *   TENANT_OTP_BYPASS=false   # re-enable real SMS
-   *   TENANT_OTP_BYPASS_CODE=1234   # change the bypass code if needed
-   *
-   * Defaults: bypass is ON, code is "1234".
+   * SMS sending is HARDCODED OFF while the team is testing builds. The
+   * verify endpoint accepts the fixed code "1234" for any active tenant.
+   * To re-enable Twilio later: uncomment the `twilio.start` line below
+   * and replace the `code === "1234"` check with the original
+   * `await this.twilio.check(...)` call.
    */
-  private tenantOtpBypassEnabled(): boolean {
-    // Default to true so a fresh deploy / missing env still works for testers.
-    const v = process.env.TENANT_OTP_BYPASS;
-    if (v === undefined) return true;
-    return v.toLowerCase() !== "false";
-  }
-  private tenantOtpBypassCode(): string {
-    return (process.env.TENANT_OTP_BYPASS_CODE || "1234").trim();
-  }
 
   async tenantRequestOtp(input: { phone: string; channel?: "sms" | "call" | "whatsapp" }) {
     const raw = (input.phone || "").trim();
@@ -502,15 +489,9 @@ export class AuthService {
       return { success: true, message: "إذا كان الرقم مسجّلاً، فقد أرسلنا رمز التحقق." };
     }
 
-    if (this.tenantOtpBypassEnabled()) {
-      // SMS is paused for QA/testing. Log so we can see the flow in server logs
-      // but don't actually call Twilio.
-      new Logger("AuthService").log(`[bypass] tenant OTP request for ${phone} — SMS skipped, accept code ${this.tenantOtpBypassCode()}`);
-      return { success: true, message: "تم إرسال رمز التحقق إلى جوالك." };
-    }
-
-    // Real SMS path — re-enabled once TENANT_OTP_BYPASS=false.
-    await this.twilio.start(phone, input.channel || "sms");
+    // SMS paused — DO NOT delete this block; flip back on when Twilio is needed.
+    // await this.twilio.start(phone, input.channel || "sms");
+    new Logger("AuthService").log(`[bypass] tenant OTP request for ${phone} — SMS skipped, accept code 1234`);
     return { success: true, message: "تم إرسال رمز التحقق إلى جوالك." };
   }
 
@@ -526,10 +507,9 @@ export class AuthService {
       throw new UnauthorizedException("بيانات غير صحيحة");
     }
 
-    const bypass = this.tenantOtpBypassEnabled();
-    const ok = bypass
-      ? code === this.tenantOtpBypassCode()
-      : await this.twilio.check(phone, code, input.channel || "sms");
+    // SMS paused — accept the hardcoded test code. To re-enable real OTP,
+    // restore: const ok = await this.twilio.check(phone, code, input.channel || "sms");
+    const ok = code === "1234";
     if (!ok) {
       await this.recordLogin(null, phone, "failed", ctx.ip, ctx.ua);
       throw new UnauthorizedException("رمز التحقق غير صحيح");
