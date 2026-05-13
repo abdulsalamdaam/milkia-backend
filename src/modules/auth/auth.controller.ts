@@ -122,22 +122,28 @@ export class AuthController {
   }
 
   /* ── Tenant: phone OTP login ── */
-  // OTP-send (Twilio cost) — 1 per minute and 5 per hour per (IP + phone).
+  // OTP-send (Twilio cost) — 3 per minute and 15 per hour per (IP + phone).
+  // Generous enough that a tenant retrying after a missed SMS, or coming back
+  // through the flow a couple of times in a session, doesn't hit a 429. The
+  // mobile client also enforces a 60s client-side cooldown on the resend
+  // button, and Twilio Verify has its own upstream limits, so this layer can
+  // afford to be lenient.
   @Post("tenant/request-otp")
   @HttpCode(200)
   @Throttle({
-    short: { limit: 1, ttl: 60_000 },
-    long:  { limit: 5, ttl: 3600_000 },
+    short: { limit: 3,  ttl: 60_000 },
+    long:  { limit: 15, ttl: 3600_000 },
   })
   @UseGuards(OtpThrottlerGuard)
   tenantRequestOtp(@Body() body: TenantOtpStartDto) {
     return this.auth.tenantRequestOtp(body);
   }
 
-  // OTP-check — 5 attempts per 5 min per (IP + phone).
+  // OTP-check — 15 attempts per 5 min per (IP + phone). Brute-force is still
+  // bounded upstream by Twilio Verify (max-check-attempts) and the code TTL.
   @Post("tenant/verify-otp")
   @HttpCode(200)
-  @Throttle({ default: { limit: 5, ttl: 300_000 } })
+  @Throttle({ default: { limit: 15, ttl: 300_000 } })
   @UseGuards(OtpThrottlerGuard)
   tenantVerifyOtp(@Body() body: TenantOtpVerifyDto, @Req() req: Request) {
     return this.auth.tenantVerifyOtp(body, clientCtx(req));
