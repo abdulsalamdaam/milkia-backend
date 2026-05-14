@@ -9,13 +9,17 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { seedDemoData } from "./demo-seed";
 import { ALL_PERMISSIONS, ROLE_PRESETS } from "../../common/permissions";
+import { EmailService } from "../email/email.service";
 
 @ApiTags("admin")
 @ApiBearerAuth("user-jwt")
 @Controller("admin")
 @UseGuards(JwtAuthGuard, SuperAdminGuard)
 class AdminController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   @Get("stats")
   async stats() {
@@ -374,17 +378,20 @@ class AdminController {
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
+    // Fire-and-forget the approval notice — must not block the API response.
+    void this.email.sendRegistrationApproved(user.email, user.name);
     return { success: true, id: user.id, accountStatus: user.accountStatus };
   }
 
   @Patch("registrations/:id/reject")
-  async reject(@Param("id") id: string) {
+  async reject(@Param("id") id: string, @Body() body: { reason?: string } | undefined) {
     const uid = parseInt(id, 10);
     const [user] = await this.db.update(usersTable)
       .set({ accountStatus: "rejected", isActive: false })
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
+    void this.email.sendRegistrationRejected(user.email, user.name, body?.reason ?? null);
     return { success: true, id: user.id, accountStatus: user.accountStatus };
   }
 

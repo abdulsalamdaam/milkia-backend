@@ -87,14 +87,18 @@ class PublicContactController {
       userAgent,
     }).returning();
 
-    void this.email.sendContactReceived({
+    const payload = {
       id: row!.id,
       name: row!.name,
       email: row!.email,
       phone: row!.phone,
       description: row!.description,
       source: row!.source,
-    });
+    };
+    void this.email.sendContactReceived(payload);
+    // If the submitter left an email, send them an acknowledgment so they
+    // know the message went through. No-op when only a phone was given.
+    if (row!.email) void this.email.sendContactAck(row!.email, payload);
 
     return {
       success: true,

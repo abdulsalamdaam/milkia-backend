@@ -1,5 +1,12 @@
 import { Injectable, Logger } from "@nestjs/common";
-import { LOGO_DATA_URI } from "./email-assets";
+
+/**
+ * Public URL of the brand logo used in the email layout. Gmail strips
+ * data: URIs and many corporate filters block inline images, so we
+ * always reference a hosted PNG. Defaults to the web project's
+ * `/logo.png`; override via env when the asset moves.
+ */
+const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://oqudk.com/logo.png";
 
 export interface SendEmailInput {
   to: string | string[];
@@ -192,6 +199,139 @@ export class EmailService {
     });
   }
 
+  /**
+   * Fires when an admin/landlord transitions a maintenance ticket to a new
+   * status (e.g. open → in_progress → completed). Keeps the tenant in the
+   * loop. No-op when `to` is empty (tenant without an email on file).
+   */
+  async sendMaintenanceStatusChanged(to: string, payload: MaintenanceEmailPayload & { previousStatus?: string | null }): Promise<boolean> {
+    if (!to) return false;
+    const statusLabels: Record<string, string> = {
+      open:              "مفتوحة",
+      in_progress:       "قيد التنفيذ",
+      pending_approval:  "بانتظار الموافقة",
+      completed:         "مكتملة",
+      cancelled:         "ملغاة",
+    };
+    const newLabel = statusLabels[String(payload.status)] || String(payload.status || "—");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">تحديث على طلب الصيانة #${payload.id}</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        نود إعلامك بأن حالة طلب الصيانة الخاص بك قد تم تحديثها.
+      </p>
+      <div style="margin:16px 0;padding:14px 16px;background:linear-gradient(135deg,#eff6ff,#e0e7ff);border:1px solid #c7d2fe;border-radius:10px;text-align:center;">
+        <div style="color:#475569;font-size:12px;margin-bottom:4px;">الحالة الحالية</div>
+        <div style="color:#1e3a8a;font-size:20px;font-weight:700;">${escapeHtml(newLabel)}</div>
+      </div>
+      ${row("الوحدة", payload.unitLabel || "—")}
+      ${row("الأولوية", payload.priority || "medium")}
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#64748b;font-size:12px;margin-bottom:6px;">طلبك الأصلي</div>
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(payload.description)}</div>
+      </div>
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        ${payload.status === "completed"
+          ? "تم إكمال الطلب. إذا كانت لديك أي ملاحظات يسعدنا تواصلك معنا."
+          : "سنواصل تحديثك بأي تغييرات على هذا الطلب."}
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: `تحديث طلب الصيانة #${payload.id} — ${newLabel}`,
+      html,
+      text: `تم تحديث طلب الصيانة #${payload.id} إلى: ${newLabel}.`,
+    });
+  }
+
+  /**
+   * Sent to the user once an admin approves their pending registration.
+   */
+  async sendRegistrationApproved(to: string, name: string): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">تم تفعيل حسابك ✅</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        مرحباً ${safeName}،<br/>
+        يسعدنا إعلامك بأن حسابك في <strong>عقودك · Oqudk</strong> قد تم تفعيله بنجاح. يمكنك الآن تسجيل الدخول وإدارة عقاراتك.
+      </p>
+      <div style="margin:24px 0;text-align:center;">
+        <a href="https://oqudk.com/login" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#ffffff;text-decoration:none;font-weight:700;padding:12px 28px;border-radius:10px;">
+          تسجيل الدخول
+        </a>
+      </div>
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        إذا واجهت أي مشكلة في الدخول لا تتردد في التواصل معنا على hello@oqudk.com.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: "تم تفعيل حسابك في عقودك · Account approved",
+      html,
+      text: `مرحباً ${name}، تم تفعيل حسابك في عقودك. يمكنك الآن تسجيل الدخول عبر https://oqudk.com/login`,
+    });
+  }
+
+  /**
+   * Sent to the user when an admin rejects their pending registration.
+   * Optional `reason` is appended to the body when present.
+   */
+  async sendRegistrationRejected(to: string, name: string, reason?: string | null): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const safeReason = reason ? escapeHtml(reason) : "";
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">طلب التسجيل</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        ${safeName}،<br/>
+        نعتذر، لم نتمكّن من قبول طلب تسجيلك في <strong>عقودك · Oqudk</strong> في الوقت الحالي.
+      </p>
+      ${safeReason
+        ? `<div style="margin-top:16px;padding:12px;background:#fef2f2;border-radius:8px;border:1px solid #fecaca;">
+             <div style="color:#991b1b;font-size:12px;margin-bottom:6px;">السبب</div>
+             <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${safeReason}</div>
+           </div>`
+        : ""}
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        إذا كان لديك أي استفسار يمكنك التواصل مع فريقنا على hello@oqudk.com.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: "بشأن طلب تسجيلك في عقودك",
+      html,
+      text: `${name}، نعتذر، لم نتمكّن من قبول طلب تسجيلك في عقودك في الوقت الحالي.${reason ? ` السبب: ${reason}` : ""}`,
+    });
+  }
+
+  /**
+   * Acknowledgment back to the person who submitted the public contact form.
+   * Separate from sendContactReceived which fires off to the admin/team.
+   */
+  async sendContactAck(to: string, payload: ContactEmailPayload): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(payload.name || "");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">شكراً لتواصلك معنا</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        ${safeName ? `${safeName}، ` : ""}استلمنا رسالتك (رقم <strong>#${payload.id}</strong>) وسيقوم فريقنا بالرد عليك في أقرب وقت ممكن.
+      </p>
+      <div style="margin-top:16px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#64748b;font-size:12px;margin-bottom:6px;">نسخة من رسالتك</div>
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(payload.description)}</div>
+      </div>
+      <p style="margin:24px 0 0;color:#64748b;font-size:13px;">
+        إذا أردت إضافة معلومات يمكنك الرد على هذا البريد مباشرة.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: `استلمنا رسالتك #${payload.id} — عقودك`,
+      html,
+      text: `استلمنا رسالتك رقم #${payload.id}. سنرد عليك قريباً.`,
+    });
+  }
+
   async sendMaintenanceCreated(payload: MaintenanceEmailPayload, to?: string): Promise<boolean> {
     const recipient = to || this.adminEmail;
     if (!recipient) {
@@ -273,7 +413,7 @@ function layout(inner: string): string {
     <!-- Logo header — soft brand-blue gradient banner -->
     <tr>
       <td style="background:linear-gradient(135deg,#eff6ff 0%,#e0e7ff 100%);border-radius:16px 16px 0 0;padding:28px 24px;text-align:center;border:1px solid #e2e8f0;border-bottom:0;">
-        <img src="${LOGO_DATA_URI}" alt="عقودك · Oqudk" width="160" height="102" style="display:inline-block;height:auto;max-width:160px;border:0;outline:none;text-decoration:none;">
+        <img src="${EMAIL_LOGO_URL}" alt="عقودك · Oqudk" width="160" height="102" style="display:inline-block;height:auto;max-width:160px;border:0;outline:none;text-decoration:none;">
       </td>
     </tr>
     <!-- Main content card -->

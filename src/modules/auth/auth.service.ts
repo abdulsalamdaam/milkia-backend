@@ -159,10 +159,16 @@ export class AuthService {
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
 
-    // Even when the user doesn't exist we still respond with success and
-    // do nothing — this prevents email-enumeration attacks.
+    // Product decision: surface a clear "not registered" error instead of
+    // silently no-oping. This trades a small enumeration risk (an attacker
+    // can probe which emails exist) for a much better UX — users who mistype
+    // or use the wrong email get told immediately instead of waiting forever
+    // for a code that never arrives.
     if (!user) {
-      return { success: true, message: "إذا كان الحساب مسجّلاً، فقد أرسلنا رمز الدخول.", expiresInMinutes: EMAIL_OTP_TTL_MIN };
+      throw new NotFoundException({
+        error: "هذا البريد الإلكتروني غير مسجّل. الرجاء إنشاء حساب جديد.",
+        code: "NOT_REGISTERED",
+      });
     }
 
     // Mirror the password-flow account-status checks so suspended users

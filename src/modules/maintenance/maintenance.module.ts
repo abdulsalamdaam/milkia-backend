@@ -175,13 +175,47 @@ class MaintenanceController {
   @RequirePermissions(PERMISSIONS.MAINTENANCE_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {
     const rid = parseInt(id, 10);
+    // Capture the prior status so we can detect a transition and only email
+    // the tenant when the status actually changed (not on cosmetic edits
+    // like description/supplier).
+    const [previous] = await this.db
+      .select({ status: maintenanceRequestsTable.status, tenantId: maintenanceRequestsTable.tenantId })
+      .from(maintenanceRequestsTable)
+      .where(and(eq(maintenanceRequestsTable.id, rid), eq(maintenanceRequestsTable.userId, scopeId(user)), isNull(maintenanceRequestsTable.deletedAt)));
+
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
     const [row] = await this.db.update(maintenanceRequestsTable).set(updateData)
       .where(and(eq(maintenanceRequestsTable.id, rid), eq(maintenanceRequestsTable.userId, scopeId(user)), isNull(maintenanceRequestsTable.deletedAt)))
       .returning();
     if (!row) throw new NotFoundException("الطلب غير موجود");
+
+    if (previous && previous.status !== row.status) {
+      void this.notifyTenantOfStatusChange(row, previous.status ?? null);
+    }
     return row;
+  }
+
+  private async notifyTenantOfStatusChange(row: typeof maintenanceRequestsTable.$inferSelect, previousStatus: string | null) {
+    try {
+      if (!row.tenantId) return;
+      const [tenant] = await this.db
+        .select({ name: tenantsTable.name, email: tenantsTable.email })
+        .from(tenantsTable)
+        .where(eq(tenantsTable.id, row.tenantId));
+      if (!tenant?.email) return;
+      await this.email.sendMaintenanceStatusChanged(tenant.email, {
+        id: row.id,
+        unitLabel: row.unitLabel,
+        description: row.description,
+        priority: row.priority,
+        status: row.status,
+        tenantName: tenant.name,
+        previousStatus,
+      });
+    } catch (err) {
+      console.error("[maintenance] notifyTenantOfStatusChange failed:", err);
+    }
   }
 
   @Delete(":id")
