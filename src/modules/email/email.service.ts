@@ -41,7 +41,7 @@ export interface ContactEmailPayload {
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private readonly apiKey = process.env.RESEND_API_KEY || "";
-  private readonly from = process.env.RESEND_FROM || "Milkia <hello@oqudk.com>";
+  private readonly from = process.env.RESEND_FROM || "Oqudk <hello@oqudk.com>";
   private readonly adminEmail = process.env.ADMIN_NOTIFY_EMAIL || "";
 
   isConfigured(): boolean {
@@ -109,9 +109,9 @@ export class EmailService {
     `);
     return this.send({
       to,
-      subject: `رمز الدخول · Milkia login code: ${code}`,
+      subject: `رمز الدخول · Oqudk login code: ${code}`,
       html,
-      text: `Your Milkia login code: ${code}\nValid for ${ttlMinutes} minutes.`,
+      text: `Your Oqudk login code: ${code}\nValid for ${ttlMinutes} minutes.`,
     });
   }
 
@@ -121,7 +121,7 @@ export class EmailService {
     const html = layout(`
       <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">مرحباً ${safeName} 👋</h1>
       <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
-        شكراً لتسجيلك في <strong>Milkia</strong>. تم استلام طلبك بنجاح، وسيقوم فريقنا بمراجعة الحساب وتفعيله خلال وقت قصير.
+        شكراً لتسجيلك في <strong>عقودك</strong>. تم استلام طلبك بنجاح، وسيقوم فريقنا بمراجعة الحساب وتفعيله خلال وقت قصير.
       </p>
       <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
         سنرسل لك بريداً آخر فور تفعيل الحساب لتتمكّن من الدخول وإدارة عقاراتك.
@@ -132,9 +132,9 @@ export class EmailService {
     `);
     return this.send({
       to,
-      subject: "أهلاً بك في Milkia",
+      subject: "أهلاً بك في عقودك",
       html,
-      text: `مرحباً ${name}، شكراً لتسجيلك في Milkia. سيقوم فريقنا بمراجعة حسابك وتفعيله قريباً.`,
+      text: `مرحباً ${name}، شكراً لتسجيلك في عقودك. سيقوم فريقنا بمراجعة حسابك وتفعيله قريباً.`,
     });
   }
 
@@ -244,14 +244,14 @@ function layout(inner: string): string {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Milkia</title>
+  <title>عقودك · Oqudk</title>
 </head>
-<body style="margin:0;padding:32px 16px;background:#eef2f7;font-family:-apple-system,'Segoe UI',Tahoma,Arial,'Tajawal',sans-serif;color:#0f172a;">
+<body style="margin:0;padding:32px 16px;background:#eef2f7;font-family:-apple-system,'Segoe UI',Tahoma,Arial,'IBM Plex Sans Arabic',sans-serif;color:#0f172a;">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;margin:0 auto;">
     <!-- Logo header — soft brand-blue gradient banner -->
     <tr>
       <td style="background:linear-gradient(135deg,#eff6ff 0%,#e0e7ff 100%);border-radius:16px 16px 0 0;padding:28px 24px;text-align:center;border:1px solid #e2e8f0;border-bottom:0;">
-        <img src="${LOGO_DATA_URI}" alt="Milkia · ملكية" width="160" height="80" style="display:inline-block;height:auto;max-width:160px;border:0;outline:none;text-decoration:none;">
+        <img src="${LOGO_DATA_URI}" alt="عقودك · Oqudk" width="160" height="102" style="display:inline-block;height:auto;max-width:160px;border:0;outline:none;text-decoration:none;">
       </td>
     </tr>
     <!-- Main content card -->
@@ -263,7 +263,7 @@ function layout(inner: string): string {
     <!-- Footer -->
     <tr>
       <td style="padding:20px 8px 0;text-align:center;color:#94a3b8;font-size:12px;">
-        <div style="margin-bottom:6px;">© ${new Date().getFullYear()} Milkia · ملكية — منصة إدارة العقارات</div>
+        <div style="margin-bottom:6px;">© ${new Date().getFullYear()} عقودك · Oqudk — منصة إدارة العقارات</div>
         <div><a href="https://oqudk.com" style="color:#94a3b8;text-decoration:none;">oqudk.com</a></div>
       </td>
     </tr>

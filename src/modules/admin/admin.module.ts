@@ -142,7 +142,7 @@ class AdminController {
   }
 
   /**
-   * "Admin Users" = Milkia internal team (super_admin + admin only).
+   * "Admin Users" = Oqudk internal team (super_admin + admin only).
    * Customer landlords (role='user' or 'demo') live under /admin/companies.
    * This separation keeps the company team panel decoupled from customer data.
    */
@@ -257,7 +257,7 @@ class AdminController {
     const payload = [{
       to: tenant.fcmToken,
       sound: "default",
-      title: body.title || "ملكية",
+      title: body.title || "عقودك",
       body: body.body || `مرحباً ${tenant.name}، هذه رسالة تجريبية.`,
       data: body.data || { type: "test" },
     }];

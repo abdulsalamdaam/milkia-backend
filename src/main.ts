@@ -32,7 +32,7 @@ async function bootstrap() {
    * @ApiBearerAuth("tenant-jwt").
    */
   const swaggerConfig = new DocumentBuilder()
-    .setTitle("Milkia API")
+    .setTitle("Oqudk API")
     .setDescription("Property-management API for landlords, tenants, and admins.")
     .setVersion("1.0")
     .addBearerAuth({ type: "http", scheme: "bearer", bearerFormat: "JWT" }, "user-jwt")
