@@ -43,6 +43,18 @@ export class EmailService {
   private readonly apiKey = process.env.RESEND_API_KEY || "";
   private readonly from = process.env.RESEND_FROM || "Oqudk <hello@oqudk.com>";
   private readonly adminEmail = process.env.ADMIN_NOTIFY_EMAIL || "";
+  /**
+   * Default Reply-To. Sending `noreply@`-style addresses tanks deliverability;
+   * giving every email a real mailbox to reply to keeps spam filters happier.
+   */
+  private readonly replyTo = process.env.RESEND_REPLY_TO || "hello@oqudk.com";
+  /**
+   * One-click List-Unsubscribe (RFC 8058). Pleases Gmail's bulk-sender
+   * policy and adds ~1 point on mail-tester. The URL must accept a POST
+   * with no body and the mailto must route to a real inbox.
+   */
+  private readonly listUnsubscribeUrl = process.env.LIST_UNSUBSCRIBE_URL || "https://oqudk.com/email/unsubscribe";
+  private readonly listUnsubscribeMailto = process.env.LIST_UNSUBSCRIBE_MAILTO || "unsubscribe@oqudk.com";
 
   isConfigured(): boolean {
     return Boolean(this.apiKey);
@@ -55,6 +67,13 @@ export class EmailService {
       return false;
     }
     try {
+      // List-Unsubscribe is added on every send. Even on transactional OTP
+      // codes the cost is zero (real recipients won't click it) and the
+      // header reliably nudges spam filters in our favor.
+      const customHeaders: Record<string, string> = {
+        "List-Unsubscribe": `<mailto:${this.listUnsubscribeMailto}?subject=unsubscribe>, <${this.listUnsubscribeUrl}>`,
+        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+      };
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -67,7 +86,8 @@ export class EmailService {
           subject: input.subject,
           html: input.html,
           text: input.text,
-          reply_to: input.replyTo,
+          reply_to: input.replyTo || this.replyTo,
+          headers: customHeaders,
         }),
       });
       if (!res.ok) {
