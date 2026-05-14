@@ -41,7 +41,7 @@ export interface ContactEmailPayload {
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private readonly apiKey = process.env.RESEND_API_KEY || "";
-  private readonly from = process.env.RESEND_FROM || "Milkia <noreply@milkia.net>";
+  private readonly from = process.env.RESEND_FROM || "Milkia <noreply@oqudk.com>";
   private readonly adminEmail = process.env.ADMIN_NOTIFY_EMAIL || "";
 
   isConfigured(): boolean {
@@ -264,7 +264,7 @@ function layout(inner: string): string {
     <tr>
       <td style="padding:20px 8px 0;text-align:center;color:#94a3b8;font-size:12px;">
         <div style="margin-bottom:6px;">© ${new Date().getFullYear()} Milkia · ملكية — منصة إدارة العقارات</div>
-        <div><a href="https://milkia.net" style="color:#94a3b8;text-decoration:none;">milkia.net</a></div>
+        <div><a href="https://oqudk.com" style="color:#94a3b8;text-decoration:none;">oqudk.com</a></div>
       </td>
     </tr>
   </table>
