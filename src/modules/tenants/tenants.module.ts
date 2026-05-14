@@ -10,7 +10,16 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 
-const FIELDS = ["name", "type", "status", "nationalId", "phone", "email", "taxNumber", "address", "postalCode", "additionalNumber", "buildingNumber", "nationality", "notes"] as const;
+const FIELDS = [
+  "name", "type", "status", "nationalId", "phone", "email", "taxNumber",
+  "address", "postalCode", "additionalNumber", "buildingNumber", "nationality", "notes",
+  // Phase 4 additions: financial info, structured national address,
+  // representative (وكيل) fields.
+  "iban", "employer", "monthlyIncome",
+  "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
+  "isRepresentative", "representativeDocUrl",
+  "originalTenantName", "originalTenantIdNumber", "originalTenantPhone", "originalTenantEmail",
+] as const;
 
 @ApiTags("tenants")
 @ApiBearerAuth("user-jwt")
@@ -45,6 +54,19 @@ class TenantsController {
       buildingNumber: body.buildingNumber ?? null,
       nationality: body.nationality ?? null,
       notes: body.notes ?? null,
+      // Phase 4 additions:
+      iban: body.iban ?? null,
+      employer: body.employer ?? null,
+      monthlyIncome: body.monthlyIncome != null && body.monthlyIncome !== "" ? String(body.monthlyIncome) : null,
+      nationalAddressCity: body.nationalAddressCity ?? null,
+      nationalAddressDistrict: body.nationalAddressDistrict ?? null,
+      nationalAddressStreet: body.nationalAddressStreet ?? null,
+      isRepresentative: Boolean(body.isRepresentative ?? false),
+      representativeDocUrl: body.representativeDocUrl ?? null,
+      originalTenantName: body.originalTenantName ?? null,
+      originalTenantIdNumber: body.originalTenantIdNumber ?? null,
+      originalTenantPhone: body.originalTenantPhone ?? null,
+      originalTenantEmail: body.originalTenantEmail ?? null,
       isDemo: "false",
     }).returning();
     return tenant;

@@ -10,7 +10,17 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 
-const FIELDS = ["name", "type", "status", "idNumber", "phone", "email", "iban", "managementFeePercent", "taxNumber", "address", "postalCode", "additionalNumber", "buildingNumber", "notes"] as const;
+const FIELDS = [
+  "name", "type", "status", "idNumber", "phone", "email", "iban",
+  "managementFeePercent", "taxNumber", "address",
+  "postalCode", "additionalNumber", "buildingNumber", "notes",
+  // Representative (وكيل) fields — added in Phase 4 of the asset-tree redesign.
+  "isRepresentative", "representativeDocUrl",
+  "originalOwnerName", "originalOwnerIdNumber", "originalOwnerPhone", "originalOwnerEmail",
+  // Structured national address (العنوان الوطني). The legacy free-text `address`
+  // column is still updatable above for backwards compat.
+  "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
+] as const;
 
 @ApiTags("owners")
 @ApiBearerAuth("user-jwt")
@@ -44,6 +54,17 @@ class OwnersController {
       additionalNumber: body.additionalNumber ?? null,
       buildingNumber: body.buildingNumber ?? null,
       notes: body.notes ?? null,
+      // Representative + national-address columns (Phase 4). All nullable
+      // except isRepresentative, which defaults to false.
+      isRepresentative: Boolean(body.isRepresentative ?? false),
+      representativeDocUrl: body.representativeDocUrl ?? null,
+      originalOwnerName: body.originalOwnerName ?? null,
+      originalOwnerIdNumber: body.originalOwnerIdNumber ?? null,
+      originalOwnerPhone: body.originalOwnerPhone ?? null,
+      originalOwnerEmail: body.originalOwnerEmail ?? null,
+      nationalAddressCity: body.nationalAddressCity ?? null,
+      nationalAddressDistrict: body.nationalAddressDistrict ?? null,
+      nationalAddressStreet: body.nationalAddressStreet ?? null,
       isDemo: "false",
     }).returning();
     return owner;

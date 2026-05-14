@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, pgEnum, numeric, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, pgEnum, numeric, integer, boolean } from "drizzle-orm/pg-core";
 
 export const ownerTypeEnum = pgEnum("owner_type", ["individual", "company"]);
 export const ownerStatusEnum = pgEnum("owner_status", ["active", "inactive"]);
@@ -21,6 +21,22 @@ export const ownersTable = pgTable("owners", {
   iban: text("iban"),
   managementFeePercent: numeric("management_fee_percent", { precision: 5, scale: 2 }),
   taxNumber: text("tax_number"),
+  // Wakala / representative flow. When isRepresentative is true the row
+  // describes the agent (وكيل) acting on behalf of the actual owner stored
+  // in the original* columns below. The authorization document URL is the
+  // power-of-attorney scan; UI shows a download chip.
+  isRepresentative: boolean("is_representative").notNull().default(false),
+  representativeDocUrl: text("representative_doc_url"),
+  originalOwnerName: text("original_owner_name"),
+  originalOwnerIdNumber: text("original_owner_id_number"),
+  originalOwnerPhone: text("original_owner_phone"),
+  originalOwnerEmail: text("original_owner_email"),
+  // National address (العنوان الوطني) — Saudi standard address block.
+  // The legacy `address` is a single free-text line kept for backwards
+  // compatibility; the structured fields below feed the new wizard step.
+  nationalAddressCity: text("national_address_city"),
+  nationalAddressDistrict: text("national_address_district"),
+  nationalAddressStreet: text("national_address_street"),
   address: text("address"),
   postalCode: text("postal_code"),
   additionalNumber: text("additional_number"),
