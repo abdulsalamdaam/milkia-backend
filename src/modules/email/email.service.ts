@@ -41,7 +41,7 @@ export interface ContactEmailPayload {
 export class EmailService {
   private readonly log = new Logger(EmailService.name);
   private readonly apiKey = process.env.RESEND_API_KEY || "";
-  private readonly from = process.env.RESEND_FROM || "Milkia <noreply@oqudk.com>";
+  private readonly from = process.env.RESEND_FROM || "Milkia <hello@oqudk.com>";
   private readonly adminEmail = process.env.ADMIN_NOTIFY_EMAIL || "";
 
   isConfigured(): boolean {
