@@ -1,8 +1,9 @@
-import { pgTable, text, serial, timestamp, integer, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { ownersTable } from "./owners";
+import { deedsTable } from "./deeds";
 
 export const propertyTypeEnum = pgEnum("property_type", ["residential", "commercial", "mixed", "land", "villa", "apartment_building", "tower", "plaza", "mall", "chalet", "other"]);
 export const propertyStatusEnum = pgEnum("property_status", ["active", "inactive", "maintenance"]);
@@ -16,7 +17,12 @@ export const propertiesTable = pgTable("properties", {
   city: text("city").notNull(),
   district: text("district"),
   street: text("street"),
+  // Legacy free-text deed number kept for backwards-compat with rows created
+  // before the deeds table existed; new flows write via deedId and a join.
   deedNumber: text("deed_number"),
+  // FK to the deed that legally backs this property. Enforced 1:1 via
+  // uniqueIndex below — a deed can be linked to at most one property.
+  deedId: integer("deed_id").references(() => deedsTable.id, { onDelete: "set null" }),
   totalUnits: integer("total_units").notNull().default(0),
   floors: integer("floors"),
   elevators: integer("elevators"),
@@ -35,7 +41,10 @@ export const propertiesTable = pgTable("properties", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
-});
+}, (t) => ({
+  // 1:1 enforcement: a single deed cannot back two properties.
+  uniqDeedId: uniqueIndex("properties_deed_id_uniq").on(t.deedId),
+}));
 
 export const insertPropertySchema = createInsertSchema(propertiesTable).omit({ id: true, createdAt: true, updatedAt: true });
 export type InsertProperty = z.infer<typeof insertPropertySchema>;

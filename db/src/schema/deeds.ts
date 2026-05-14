@@ -1,0 +1,47 @@
+import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { usersTable } from "./users";
+import { ownersTable } from "./owners";
+
+/**
+ * Property title deed (الصك). In the data hierarchy:
+ *
+ *   Deed → Property → Unit → Contract (Owner ↔ Tenant)
+ *
+ * Each deed represents one legal property title. The FK from properties.deedId
+ * is enforced 1:1 via a unique index on properties.deedId (see properties.ts),
+ * so a single deed cannot be re-linked to a second property.
+ */
+export const deedTypeEnum = pgEnum("deed_type", ["electronic", "paper"]);
+
+export const deedsTable = pgTable("deeds", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+
+  deedNumber: text("deed_number").notNull(),
+  deedType: deedTypeEnum("deed_type").notNull().default("electronic"),
+
+  // The attached document — single file. Filename kept separately so the UI
+  // can show the original name even when the URL is a content-hash path.
+  documentUrl: text("document_url"),
+  documentName: text("document_name"),
+
+  ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "set null" }),
+  issueDate: timestamp("issue_date", { withTimezone: true }),
+  issuingAuthority: text("issuing_authority"),
+  notes: text("notes"),
+
+  isDemo: boolean("is_demo").notNull().default(false),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
+}, (t) => ({
+  // Deed numbers must be unique per landlord scope. Two different landlords
+  // can each have their own deed numbered "1234".
+  uniqDeedNumber: uniqueIndex("deeds_user_deednumber_uniq").on(t.userId, t.deedNumber),
+}));
+
+export const insertDeedSchema = createInsertSchema(deedsTable).omit({ id: true, createdAt: true, updatedAt: true });
+export type InsertDeed = z.infer<typeof insertDeedSchema>;
+export type Deed = typeof deedsTable.$inferSelect;

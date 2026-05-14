@@ -13,7 +13,9 @@ const wantsSsl = /sslmode=(require|verify-ca|verify-full)/i.test(url);
 
 export default defineConfig({
   schema: path.join(__dirname, "./src/schema/index.ts"),
-  out: path.join(__dirname, "./drizzle"),
+  // drizzle-kit 0.31 mis-resolves absolute `out` paths (prepends "./"),
+  // so we keep this relative to the cwd. Run drizzle-kit from /db.
+  out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
     url,

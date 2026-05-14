@@ -12,6 +12,7 @@ import { HealthModule } from "./modules/health/health.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { StatsModule } from "./modules/stats/stats.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
+import { DeedsModule } from "./modules/deeds/deeds.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UnitsModule } from "./modules/units/units.module";
 import { ContractsModule } from "./modules/contracts/contracts.module";
@@ -50,6 +51,7 @@ import { CompaniesModule } from "./modules/companies/companies.module";
     AuthModule,
     StatsModule,
     DashboardModule,
+    DeedsModule,
     PropertiesModule,
     UnitsModule,
     ContractsModule,
