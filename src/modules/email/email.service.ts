@@ -74,6 +74,8 @@ export class EmailService {
         "List-Unsubscribe": `<mailto:${this.listUnsubscribeMailto}?subject=unsubscribe>, <${this.listUnsubscribeUrl}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
       };
+      const fromAddress = input.from || this.from;
+      this.log.log(`Resend send → from=${fromAddress} to=${Array.isArray(input.to) ? input.to.join(",") : input.to} subject=${input.subject}`);
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -81,7 +83,7 @@ export class EmailService {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: input.from || this.from,
+          from: fromAddress,
           to: Array.isArray(input.to) ? input.to : [input.to],
           subject: input.subject,
           html: input.html,
