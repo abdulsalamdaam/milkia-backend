@@ -41,6 +41,7 @@ export const propertiesTable = pgTable("properties", {
   imageKey: text("image_key"),
   // JSON array of MinIO object keys — the property photo gallery.
   images: jsonb("images"),
+  isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

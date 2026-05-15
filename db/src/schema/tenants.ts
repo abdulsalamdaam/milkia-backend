@@ -40,6 +40,8 @@ export const tenantsTable = pgTable("tenants", {
   status: tenantStatusEnum("status").notNull().default("active"),
   notes: text("notes"),
   isDemo: text("is_demo").default("false"),
+  // Draft records are saved incomplete and finished later.
+  isDraft: boolean("is_draft").notNull().default(false),
   tokenVersion: integer("token_version").notNull().default(0),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   fcmToken: text("fcm_token"),

@@ -21,7 +21,7 @@ const UNIT_FIELDS = [
   // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
   // The frontend's AddUnitPage was already sending these; the columns now
   // exist (migration 0003_unit_attachments).
-  "imageKey", "floorPlanKey", "documents", "images",
+  "imageKey", "floorPlanKey", "documents", "images", "isDraft",
 ] as const;
 
 @ApiTags("units")
@@ -86,6 +86,7 @@ class UnitsController {
         floorPlanKey: unitsTable.floorPlanKey,
         documents: unitsTable.documents,
         images: unitsTable.images,
+        isDraft: unitsTable.isDraft,
         notes: unitsTable.notes,
         createdAt: unitsTable.createdAt,
         tenantName: contractsTable.tenantName,

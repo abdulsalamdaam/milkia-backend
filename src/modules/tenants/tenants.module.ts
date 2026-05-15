@@ -20,6 +20,7 @@ const FIELDS = [
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
   "isRepresentative", "representativeDocUrl",
   "originalTenantName", "originalTenantIdNumber", "originalTenantPhone", "originalTenantEmail",
+  "isDraft",
 ] as const;
 
 @ApiTags("tenants")
@@ -92,6 +93,7 @@ class TenantsController {
       originalTenantIdNumber: body.originalTenantIdNumber ?? null,
       originalTenantPhone: body.originalTenantPhone ?? null,
       originalTenantEmail: body.originalTenantEmail ?? null,
+      isDraft: Boolean(body.isDraft ?? false),
       isDemo: "false",
     }).returning();
     return tenant;

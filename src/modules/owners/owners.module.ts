@@ -21,6 +21,7 @@ const FIELDS = [
   // Structured national address (العنوان الوطني). The legacy free-text `address`
   // column is still updatable above for backwards compat.
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
+  "isDraft",
 ] as const;
 
 @ApiTags("owners")
@@ -91,6 +92,7 @@ class OwnersController {
       nationalAddressCity: body.nationalAddressCity ?? null,
       nationalAddressDistrict: body.nationalAddressDistrict ?? null,
       nationalAddressStreet: body.nationalAddressStreet ?? null,
+      isDraft: Boolean(body.isDraft ?? false),
       isDemo: "false",
     }).returning();
     return owner;

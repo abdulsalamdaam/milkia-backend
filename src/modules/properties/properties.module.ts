@@ -172,6 +172,7 @@ class PropertiesController {
       notes: body.notes ?? null,
       imageKey: body.imageKey ?? null,
       images: Array.isArray(body.images) ? body.images : null,
+      isDraft: Boolean(body.isDraft ?? false),
       isDemo: false,
     }).returning();
 
@@ -207,7 +208,7 @@ class PropertiesController {
     const id = parseInt(propertyId, 10);
     const owner = scopeId(user);
     const updateData: Record<string, unknown> = {};
-    const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images"];
+    const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
     if (body.ownerId !== undefined) {
       updateData["ownerId"] = body.ownerId === null ? null : (typeof body.ownerId === "number" ? body.ownerId : parseInt(String(body.ownerId), 10));

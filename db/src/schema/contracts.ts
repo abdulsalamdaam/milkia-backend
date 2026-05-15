@@ -56,6 +56,7 @@ export const contractsTable = pgTable("contracts", {
   additionalFees: jsonb("additional_fees").$type<Array<{ id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string }>>(),
   // misc
   status: contractStatusEnum("status").notNull().default("active"),
+  isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   notes: text("notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

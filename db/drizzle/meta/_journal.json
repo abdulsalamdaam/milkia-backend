@@ -57,6 +57,13 @@
       "when": 1779138360000,
       "tag": "0007_property_unit_images",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1779138420000,
+      "tag": "0008_owner_tenant_draft",
+      "breakpoints": true
     }
   ]
 }

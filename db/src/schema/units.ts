@@ -49,6 +49,7 @@ export const unitsTable = pgTable("units", {
   documents: jsonb("documents"),
   // JSON array of MinIO object keys — the unit photo gallery.
   images: jsonb("images"),
+  isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   notes: text("notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

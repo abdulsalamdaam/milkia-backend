@@ -44,6 +44,8 @@ export const ownersTable = pgTable("owners", {
   status: ownerStatusEnum("status").notNull().default("active"),
   notes: text("notes"),
   isDemo: text("is_demo").default("false"),
+  // Draft records are saved incomplete and finished later.
+  isDraft: boolean("is_draft").notNull().default(false),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
