@@ -78,6 +78,13 @@
       "when": 1779138540000,
       "tag": "0010_payment_attachment",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1779138600000,
+      "tag": "0011_deed_fields",
+      "breakpoints": true
     }
   ]
 }

@@ -28,7 +28,16 @@ export const deedsTable = pgTable("deeds", {
   documentName: text("document_name"),
 
   ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "set null" }),
+  // National ID of the deed owner — captured for electronic deeds.
+  ownerNationalId: text("owner_national_id"),
   issueDate: timestamp("issue_date", { withTimezone: true }),
+  // Hijri form of the issue date as entered by the user (e.g. "1445-03-15").
+  // issueDate above always holds the Gregorian equivalent.
+  issueDateHijri: text("issue_date_hijri"),
+  // Paper deed (صك عقاري) fields: copy date (تاريخ النسخة) and the real-estate
+  // registry number (رقم السجل العقاري).
+  copyDate: timestamp("copy_date", { withTimezone: true }),
+  registryNumber: text("registry_number"),
   issuingAuthority: text("issuing_authority"),
   notes: text("notes"),
 
