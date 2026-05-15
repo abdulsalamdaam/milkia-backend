@@ -15,6 +15,9 @@ export const paymentsTable = pgTable("payments", {
   paidDate: date("paid_date"),
   status: paymentStatusEnum("status").notNull().default("pending"),
   receiptNumber: text("receipt_number"),
+  // MinIO object key for the evidence document attached when an installment
+  // is collected. Required by the UI before a payment can be marked paid.
+  attachmentKey: text("attachment_key"),
   description: text("description"),
   notes: text("notes"),
   isDemo: boolean("is_demo").notNull().default(false),

@@ -48,6 +48,7 @@ class PaymentsController {
         paidDate: paymentsTable.paidDate,
         status: paymentsTable.status,
         receiptNumber: paymentsTable.receiptNumber,
+        attachmentKey: paymentsTable.attachmentKey,
         description: paymentsTable.description,
         notes: paymentsTable.notes,
         createdAt: paymentsTable.createdAt,
@@ -83,6 +84,7 @@ class PaymentsController {
       paidDate: r.paidDate,
       status: r.status,
       receiptNumber: r.receiptNumber,
+      attachmentKey: r.attachmentKey,
       description: r.description,
       notes: r.notes,
       createdAt: r.createdAt,
@@ -126,7 +128,7 @@ class PaymentsController {
   @RequirePermissions(PERMISSIONS.PAYMENTS_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("paymentId") paymentId: string, @Body() body: any) {
     const id = parseInt(paymentId, 10);
-    const fields = ["amount", "dueDate", "paidDate", "status", "receiptNumber", "notes"];
+    const fields = ["amount", "dueDate", "paidDate", "status", "receiptNumber", "attachmentKey", "notes"];
     const updateData: Record<string, unknown> = {};
     for (const f of fields) if (body[f] !== undefined) updateData[f] = body[f];
     const [payment] = await this.db.update(paymentsTable).set(updateData)

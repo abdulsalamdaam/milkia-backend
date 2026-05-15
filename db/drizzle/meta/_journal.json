@@ -71,6 +71,13 @@
       "when": 1779138480000,
       "tag": "0009_owner_nationality",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1779138540000,
+      "tag": "0010_payment_attachment",
+      "breakpoints": true
     }
   ]
 }
