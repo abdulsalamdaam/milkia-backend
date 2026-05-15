@@ -37,6 +37,8 @@ export const propertiesTable = pgTable("properties", {
   ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "set null" }),
   amenitiesData: text("amenities_data"),
   notes: text("notes"),
+  // MinIO object key for the property photo (single PNG).
+  imageKey: text("image_key"),
   isDemo: boolean("is_demo").notNull().default(false),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

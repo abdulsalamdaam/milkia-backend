@@ -43,6 +43,13 @@
       "when": 1779138240000,
       "tag": "0005_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779138300000,
+      "tag": "0006_property_image",
+      "breakpoints": true
     }
   ]
 }
