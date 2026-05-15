@@ -1,9 +1,9 @@
 import {
   Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param,
-  Patch, Post, BadRequestException, ConflictException, UseGuards,
+  Patch, Post, Query, BadRequestException, ConflictException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, notInArray, sql } from "drizzle-orm";
+import { and, eq, isNull, notInArray, sql, or, ilike, count, asc, desc } from "drizzle-orm";
 import { deedsTable, propertiesTable, unitsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -11,6 +11,7 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
+import { listQuerySchema } from "../../common/pagination";
 
 /** When the caller is an employee, list their owner's data. Top-level users see their own. */
 function scopeId(user: AuthUser): number {
@@ -26,10 +27,36 @@ class PropertiesController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.PROPERTIES_VIEW)
-  async list(@CurrentUser() user: AuthUser) {
-    // Single round-trip: LEFT JOIN the deed for رقم الصك so the table can
-    // render the new first column without an N+1 per row.
-    const rows = await this.db
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    // Backwards compat: legacy callers send no query params and expect a
+    // bare Property[]. When `page` or `pageSize` is present (or `search`),
+    // we switch to the paginated shape { data, page, pageSize, total }.
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const owner = scopeId(user);
+
+    const baseWhere = and(eq(propertiesTable.userId, owner), isNull(propertiesTable.deletedAt));
+    const where = q.search
+      ? and(baseWhere, or(
+          ilike(propertiesTable.name, `%${q.search}%`),
+          ilike(propertiesTable.city, `%${q.search}%`),
+          ilike(propertiesTable.district, `%${q.search}%`),
+          ilike(propertiesTable.deedNumber, `%${q.search}%`),
+          ilike(deedsTable.deedNumber, `%${q.search}%`),
+        ))
+      : baseWhere;
+
+    // Total respects the same WHERE so pagination headers are correct.
+    const totalP = usePaginated
+      ? this.db
+          .select({ total: count() })
+          .from(propertiesTable)
+          .leftJoin(deedsTable, and(eq(propertiesTable.deedId, deedsTable.id), isNull(deedsTable.deletedAt)))
+          .where(where)
+      : Promise.resolve([{ total: 0 }]);
+
+    const sortFn = q.order === "asc" ? asc : desc;
+    let rowsQuery = this.db
       .select({
         property: propertiesTable,
         deedNumber: deedsTable.deedNumber,
@@ -37,20 +64,27 @@ class PropertiesController {
       })
       .from(propertiesTable)
       .leftJoin(deedsTable, and(eq(propertiesTable.deedId, deedsTable.id), isNull(deedsTable.deletedAt)))
-      .where(and(eq(propertiesTable.userId, scopeId(user)), isNull(propertiesTable.deletedAt)))
-      .orderBy(propertiesTable.createdAt);
+      .where(where)
+      .orderBy(sortFn(propertiesTable.createdAt))
+      .$dynamic();
+    if (usePaginated) {
+      rowsQuery = rowsQuery.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+    }
 
-    return Promise.all(rows.map(async ({ property: prop, deedNumber, deedType }) => {
+    const [rows, totalRow] = await Promise.all([rowsQuery, totalP]);
+
+    const data = await Promise.all(rows.map(async ({ property: prop, deedNumber, deedType }) => {
       const units = await this.db.select({ status: unitsTable.status }).from(unitsTable)
         .where(and(eq(unitsTable.propertyId, prop.id), isNull(unitsTable.deletedAt)));
       const totalUnits = prop.totalUnits || units.length || 0;
       const rentedUnits = units.filter(u => u.status === "rented").length;
       const occupancyRate = totalUnits > 0 ? Math.round((rentedUnits / totalUnits) * 100) : 0;
-      // Fall back to the legacy free-text deedNumber column when no deed is
-      // linked (rows created before the deeds table existed).
       const effectiveDeedNumber = deedNumber ?? prop.deedNumber ?? null;
       return { ...prop, occupancyRate, rentedUnits, linkedDeedNumber: deedNumber, linkedDeedType: deedType, effectiveDeedNumber };
     }));
+
+    if (!usePaginated) return data; // legacy shape
+    return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   /**

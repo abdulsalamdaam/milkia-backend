@@ -1,6 +1,6 @@
-import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { ownersTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -9,6 +9,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { listQuerySchema } from "../../common/pagination";
 
 const FIELDS = [
   "name", "type", "status", "idNumber", "phone", "email", "iban",
@@ -31,8 +32,33 @@ class OwnersController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.OWNERS_VIEW)
-  list(@CurrentUser() user: AuthUser) {
-    return this.db.select().from(ownersTable).where(and(eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt))).orderBy(ownersTable.createdAt);
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const owner = scopeId(user);
+
+    const baseWhere = and(eq(ownersTable.userId, owner), isNull(ownersTable.deletedAt));
+    const where = q.search
+      ? and(baseWhere, or(
+          ilike(ownersTable.name, `%${q.search}%`),
+          ilike(ownersTable.idNumber, `%${q.search}%`),
+          ilike(ownersTable.phone, `%${q.search}%`),
+          ilike(ownersTable.email, `%${q.search}%`),
+        ))
+      : baseWhere;
+
+    const sortFn = q.order === "asc" ? asc : desc;
+    let rowsQ = this.db.select().from(ownersTable).where(where).orderBy(sortFn(ownersTable.createdAt)).$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated
+        ? this.db.select({ total: count() }).from(ownersTable).where(where)
+        : Promise.resolve([{ total: 0 }]),
+    ]);
+    if (!usePaginated) return rows;
+    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Post()

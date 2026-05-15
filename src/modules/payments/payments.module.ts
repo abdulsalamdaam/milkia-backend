@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { paymentsTable, contractsTable } from "@milkia/database";
+import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -19,8 +20,17 @@ class PaymentsController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.PAYMENTS_VIEW)
-  async list(@CurrentUser() user: AuthUser) {
-    const rows = await this.db
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const baseWhere = and(eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt));
+    const where = q.search ? and(baseWhere, or(
+      ilike(paymentsTable.receiptNumber, `%${q.search}%`),
+      ilike(contractsTable.tenantName, `%${q.search}%`),
+      ilike(contractsTable.contractNumber, `%${q.search}%`),
+    )) : baseWhere;
+
+    let rowsQ = this.db
       .select({
         id: paymentsTable.id,
         contractId: paymentsTable.contractId,
@@ -37,10 +47,19 @@ class PaymentsController {
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
-      .where(and(eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt)))
-      .orderBy(paymentsTable.dueDate);
+      .where(where)
+      .orderBy((q.order === "asc" ? asc : desc)(paymentsTable.dueDate))
+      .$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
 
-    return rows.map(r => ({
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated ? this.db.select({ total: count() }).from(paymentsTable)
+        .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
+        .where(where) : Promise.resolve([{ total: 0 }]),
+    ]);
+
+    const data = rows.map(r => ({
       id: r.id,
       contractId: r.contractId,
       amount: r.amount,
@@ -53,6 +72,8 @@ class PaymentsController {
       createdAt: r.createdAt,
       contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName } : null,
     }));
+    if (!usePaginated) return data;
+    return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Post()

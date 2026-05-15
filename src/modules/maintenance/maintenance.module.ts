@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
 import { maintenanceRequestsTable, contractsTable, unitsTable, propertiesTable, tenantsTable } from "@milkia/database";
+import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -25,10 +26,19 @@ class MaintenanceController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.MAINTENANCE_VIEW)
-  async list(@CurrentUser() user: AuthUser) {
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const baseWhere = and(eq(maintenanceRequestsTable.userId, scopeId(user)), isNull(maintenanceRequestsTable.deletedAt));
+    const where = q.search ? and(baseWhere, or(
+      ilike(maintenanceRequestsTable.unitLabel, `%${q.search}%`),
+      ilike(maintenanceRequestsTable.description, `%${q.search}%`),
+      ilike(maintenanceRequestsTable.supplier, `%${q.search}%`),
+    )) : baseWhere;
+
     // Return tickets owned by the landlord, joined with tenant and unit info
     // for richer display in the dashboard.
-    const rows = await this.db
+    let rowsQ = this.db
       .select({
         id: maintenanceRequestsTable.id,
         userId: maintenanceRequestsTable.userId,
@@ -53,9 +63,19 @@ class MaintenanceController {
       .leftJoin(contractsTable, eq(maintenanceRequestsTable.contractId, contractsTable.id))
       .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
       .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
-      .where(and(eq(maintenanceRequestsTable.userId, scopeId(user)), isNull(maintenanceRequestsTable.deletedAt)))
-      .orderBy(desc(maintenanceRequestsTable.createdAt));
-    return rows;
+      .where(where)
+      .orderBy((q.order === "asc" ? asc : desc)(maintenanceRequestsTable.createdAt))
+      .$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated
+        ? this.db.select({ total: count() }).from(maintenanceRequestsTable).where(where)
+        : Promise.resolve([{ total: 0 }]),
+    ]);
+    if (!usePaginated) return rows;
+    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   /**

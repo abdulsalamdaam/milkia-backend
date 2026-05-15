@@ -1,7 +1,8 @@
-import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { contractsTable, unitsTable, propertiesTable, paymentsTable } from "@milkia/database";
+import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -32,8 +33,18 @@ class ContractsController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.CONTRACTS_VIEW)
-  async list(@CurrentUser() user: AuthUser) {
-    return this.db
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const baseWhere = and(eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt));
+    const where = q.search ? and(baseWhere, or(
+      ilike(contractsTable.contractNumber, `%${q.search}%`),
+      ilike(contractsTable.tenantName, `%${q.search}%`),
+      ilike(contractsTable.tenantIdNumber, `%${q.search}%`),
+      ilike(contractsTable.tenantPhone, `%${q.search}%`),
+    )) : baseWhere;
+
+    let rowsQ = this.db
       .select({
         id: contractsTable.id,
         unitId: contractsTable.unitId,
@@ -92,8 +103,17 @@ class ContractsController {
       .from(contractsTable)
       .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
       .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
-      .where(and(eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt)))
-      .orderBy(contractsTable.createdAt);
+      .where(where)
+      .orderBy((q.order === "asc" ? asc : desc)(contractsTable.createdAt))
+      .$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated ? this.db.select({ total: count() }).from(contractsTable).where(where) : Promise.resolve([{ total: 0 }]),
+    ]);
+    if (!usePaginated) return rows;
+    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Post()

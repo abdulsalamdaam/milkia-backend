@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { tenantsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -9,6 +9,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { listQuerySchema } from "../../common/pagination";
 
 const FIELDS = [
   "name", "type", "status", "nationalId", "phone", "email", "taxNumber",
@@ -30,10 +31,34 @@ class TenantsController {
 
   @Get()
   @RequirePermissions(PERMISSIONS.TENANTS_VIEW)
-  list(@CurrentUser() user: AuthUser, @Query("type") type?: string) {
-    const conditions = [eq(tenantsTable.userId, scopeId(user)), isNull(tenantsTable.deletedAt)];
-    if (type === "individual" || type === "company") conditions.push(eq(tenantsTable.type, type));
-    return this.db.select().from(tenantsTable).where(and(...conditions)).orderBy(tenantsTable.createdAt);
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const owner = scopeId(user);
+    const type: string | undefined = rawQuery?.type;
+
+    const baseCond = [eq(tenantsTable.userId, owner), isNull(tenantsTable.deletedAt)];
+    if (type === "individual" || type === "company") baseCond.push(eq(tenantsTable.type, type));
+    const searchCond = q.search ? [or(
+      ilike(tenantsTable.name, `%${q.search}%`),
+      ilike(tenantsTable.nationalId, `%${q.search}%`),
+      ilike(tenantsTable.phone, `%${q.search}%`),
+      ilike(tenantsTable.email, `%${q.search}%`),
+    )] : [];
+    const where = and(...baseCond, ...searchCond);
+
+    const sortFn = q.order === "asc" ? asc : desc;
+    let rowsQ = this.db.select().from(tenantsTable).where(where).orderBy(sortFn(tenantsTable.createdAt)).$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated
+        ? this.db.select({ total: count() }).from(tenantsTable).where(where)
+        : Promise.resolve([{ total: 0 }]),
+    ]);
+    if (!usePaginated) return rows;
+    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Post()

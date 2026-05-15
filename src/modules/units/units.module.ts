@@ -1,6 +1,7 @@
-import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, BadRequestException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
+import { listQuerySchema } from "../../common/pagination";
 import { unitsTable, propertiesTable, contractsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -32,8 +33,21 @@ class UnitsController {
 
   @Get("units")
   @RequirePermissions(PERMISSIONS.UNITS_VIEW)
-  async listAll(@CurrentUser() user: AuthUser) {
-    return this.db
+  async listAll(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const q = listQuerySchema.parse(rawQuery ?? {});
+
+    const baseWhere = and(
+      eq(propertiesTable.userId, scopeId(user)),
+      isNull(propertiesTable.deletedAt),
+      isNull(unitsTable.deletedAt),
+    );
+    const where = q.search ? and(baseWhere, or(
+      ilike(unitsTable.unitNumber, `%${q.search}%`),
+      ilike(propertiesTable.name, `%${q.search}%`),
+    )) : baseWhere;
+
+    let rowsQ = this.db
       .select({
         id: unitsTable.id,
         propertyId: unitsTable.propertyId,
@@ -77,18 +91,27 @@ class UnitsController {
         tenantPhone: contractsTable.tenantPhone,
       })
       .from(unitsTable)
-      .innerJoin(propertiesTable, and(
-        eq(unitsTable.propertyId, propertiesTable.id),
-        eq(propertiesTable.userId, scopeId(user)),
-        isNull(propertiesTable.deletedAt),
-      ))
+      .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .leftJoin(contractsTable, and(
         eq(contractsTable.unitId, unitsTable.id),
         eq(contractsTable.status, "active"),
         isNull(contractsTable.deletedAt),
       ))
-      .where(isNull(unitsTable.deletedAt))
-      .orderBy(unitsTable.createdAt);
+      .where(where)
+      .orderBy((q.order === "asc" ? asc : desc)(unitsTable.createdAt))
+      .$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+
+    const [rows, totalRow] = await Promise.all([
+      rowsQ,
+      usePaginated
+        ? this.db.select({ total: count() }).from(unitsTable)
+            .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
+            .where(where)
+        : Promise.resolve([{ total: 0 }]),
+    ]);
+    if (!usePaginated) return rows;
+    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Get("properties/:propertyId/units")
