@@ -6,7 +6,7 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags, ApiBearerAuth, ApiConsumes } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
 import {
   paymentConfirmationsTable, paymentsTable, contractsTable, tenantsTable,
   unitsTable, propertiesTable,
@@ -161,18 +161,33 @@ export class PaymentConfirmationsController {
     private readonly uploads: UploadsService,
   ) {}
 
-  /** Landlord lists incoming confirmation requests (optionally by status). */
+  /** Landlord lists incoming confirmation requests — paginated + searchable. */
   @Get()
   @RequirePermissions(PERMISSIONS.PAYMENTS_VIEW)
-  async list(@CurrentUser() user: AuthUser, @Query("status") status?: string) {
-    const where = [
+  async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const status: string | undefined =
+      typeof rawQuery?.status === "string" && ["pending", "approved", "rejected"].includes(rawQuery.status)
+        ? rawQuery.status : undefined;
+    const search = typeof rawQuery?.search === "string" ? rawQuery.search.trim() : "";
+    const page = Math.max(1, parseInt(rawQuery?.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(rawQuery?.pageSize, 10) || 10));
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null || status != null);
+
+    const baseWhere = and(
       eq(paymentConfirmationsTable.userId, scopeId(user)),
       isNull(paymentConfirmationsTable.deletedAt),
-    ];
-    if (status && ["pending", "approved", "rejected"].includes(status)) {
-      where.push(eq(paymentConfirmationsTable.status, status as any));
+    );
+    const conds = [baseWhere];
+    if (status) conds.push(eq(paymentConfirmationsTable.status, status as any));
+    if (search) {
+      conds.push(or(
+        ilike(tenantsTable.name, `%${search}%`),
+        ilike(contractsTable.contractNumber, `%${search}%`),
+      ));
     }
-    return this.db
+    const where = and(...conds);
+
+    let rowsQ = this.db
       .select({
         id: paymentConfirmationsTable.id,
         paymentId: paymentConfirmationsTable.paymentId,
@@ -200,8 +215,32 @@ export class PaymentConfirmationsController {
       .leftJoin(tenantsTable, eq(paymentConfirmationsTable.tenantId, tenantsTable.id))
       .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
       .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
-      .where(and(...where))
-      .orderBy(desc(paymentConfirmationsTable.createdAt));
+      .where(where)
+      .orderBy(desc(paymentConfirmationsTable.createdAt))
+      .$dynamic();
+    if (usePaginated) rowsQ = rowsQ.limit(pageSize).offset((page - 1) * pageSize);
+
+    const [rows, totalRow, statsRows] = await Promise.all([
+      rowsQ,
+      usePaginated ? this.db.select({ total: count() })
+        .from(paymentConfirmationsTable)
+        .leftJoin(contractsTable, eq(paymentConfirmationsTable.contractId, contractsTable.id))
+        .leftJoin(tenantsTable, eq(paymentConfirmationsTable.tenantId, tenantsTable.id))
+        .where(where) : Promise.resolve([{ total: 0 }]),
+      // Per-status counts across all the landlord's requests (for the cards).
+      usePaginated ? this.db.select({ status: paymentConfirmationsTable.status, cnt: count() })
+        .from(paymentConfirmationsTable)
+        .where(baseWhere)
+        .groupBy(paymentConfirmationsTable.status) : Promise.resolve([]),
+    ]);
+
+    if (!usePaginated) return rows;
+
+    const stats = { pending: 0, approved: 0, rejected: 0 };
+    for (const s of statsRows as Array<{ status: string; cnt: number }>) {
+      if (s.status in stats) stats[s.status as keyof typeof stats] = Number(s.cnt);
+    }
+    return { data: rows, page, pageSize, total: Number(totalRow[0]?.total ?? 0), stats };
   }
 
   /** Signed URL to view/download the proof attachment. */

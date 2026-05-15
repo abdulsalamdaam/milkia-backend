@@ -27,14 +27,24 @@ export class InvoicesController {
     private readonly pdf: PdfService,
   ) {}
 
-  /** GET /invoices?limit=&offset= */
+  /** GET /invoices — paginated (page/pageSize/search) or legacy (limit/offset). */
   @Get()
   @RequirePermissions(PERMISSIONS.INVOICES_VIEW)
   async list(
     @CurrentUser() user: AuthUser,
     @Query("limit") limit?: string,
     @Query("offset") offset?: string,
+    @Query("page") page?: string,
+    @Query("pageSize") pageSize?: string,
+    @Query("search") search?: string,
   ) {
+    if (page != null || pageSize != null || search != null) {
+      return this.invoices.listPaged(scopeId(user), {
+        page: Math.max(1, parseInt(page ?? "1", 10) || 1),
+        pageSize: Math.min(100, Math.max(1, parseInt(pageSize ?? "10", 10) || 10)),
+        search: search?.trim() || undefined,
+      });
+    }
     return this.invoices.list(scopeId(user), {
       limit: limit ? Math.min(500, parseInt(limit, 10) || 100) : 100,
       offset: offset ? parseInt(offset, 10) || 0 : 0,

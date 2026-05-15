@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { eq, and, isNull, desc } from "drizzle-orm";
+import { eq, and, isNull, desc, ilike, count } from "drizzle-orm";
 import {
   invoicesTable,
   invoiceLinesTable,
@@ -248,6 +248,23 @@ export class InvoiceService {
       .orderBy(desc(invoicesTable.createdAt))
       .limit(opts.limit ?? 100)
       .offset(opts.offset ?? 0);
+  }
+
+  /** Paginated + invoice-number search — returns rows plus the total count. */
+  async listPaged(
+    userId: number,
+    opts: { page: number; pageSize: number; search?: string },
+  ): Promise<{ data: Invoice[]; total: number }> {
+    const conds = [eq(invoicesTable.userId, userId), isNull(invoicesTable.deletedAt)];
+    if (opts.search) conds.push(ilike(invoicesTable.invoiceNumber, `%${opts.search}%`));
+    const where = and(...conds);
+    const [rows, totalRow] = await Promise.all([
+      this.db.select().from(invoicesTable).where(where)
+        .orderBy(desc(invoicesTable.createdAt))
+        .limit(opts.pageSize).offset((opts.page - 1) * opts.pageSize),
+      this.db.select({ total: count() }).from(invoicesTable).where(where),
+    ]);
+    return { data: rows, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   async getOneWithLines(userId: number, id: number): Promise<{ invoice: Invoice; lines: InvoiceLine[] }> {
