@@ -1,6 +1,6 @@
 # milkia-backend
 
-Milkia property-management API (NestJS 10 + Drizzle ORM + Postgres).
+Oqudk property-management API (NestJS 10 + Drizzle ORM + Postgres).
 
 ## Quick start
 
