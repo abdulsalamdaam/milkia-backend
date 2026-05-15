@@ -85,6 +85,13 @@
       "when": 1779138600000,
       "tag": "0011_deed_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779138660000,
+      "tag": "0012_unit_type_values",
+      "breakpoints": true
     }
   ]
 }

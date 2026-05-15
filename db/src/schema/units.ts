@@ -3,7 +3,14 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { propertiesTable } from "./properties";
 
-export const unitTypeEnum = pgEnum("unit_type", ["apartment", "villa", "office", "shop", "warehouse", "studio"]);
+export const unitTypeEnum = pgEnum("unit_type", [
+  "apartment", "villa", "office", "shop", "warehouse", "studio",
+  "duplex", "building", "tower", "annex", "apartmentWithAnnex", "floorWithAnnex",
+  "rooftopVilla", "driverRoom", "chalet", "sharedRoom", "hotelRoom",
+  "traditionalHouse", "twoFloorApartment", "plaza", "mall", "floor", "kiosk",
+  "workshop", "land", "leasedLand", "station", "showroom", "atm", "cinema",
+  "powerStation", "telecomTower", "hotel", "parkingLot",
+]);
 export const unitStatusEnum = pgEnum("unit_status", ["available", "rented", "maintenance", "reserved"]);
 
 export const unitsTable = pgTable("units", {
