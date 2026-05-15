@@ -120,10 +120,17 @@ class ContractsController {
   @Post()
   @RequirePermissions(PERMISSIONS.CONTRACTS_WRITE)
   async create(@CurrentUser() user: AuthUser, @Body() body: any) {
-    const { unitId, tenantName, startDate, endDate, monthlyRent } = body;
-    if (!unitId || !tenantName || !startDate || !endDate || !monthlyRent) {
-      throw new BadRequestException("البيانات الأساسية مطلوبة");
+    const isDraft = Boolean(body.isDraft ?? false);
+    const { unitId } = body;
+    if (!unitId || (!isDraft && (!body.tenantName || !body.startDate || !body.endDate || !body.monthlyRent))) {
+      throw new BadRequestException(isDraft ? "اختر الوحدة لحفظ المسودة" : "البيانات الأساسية مطلوبة");
     }
+    // Draft contracts may be incomplete — fall back so NOT NULL columns hold.
+    const today = new Date().toISOString().slice(0, 10);
+    const tenantName = body.tenantName || (isDraft ? "—" : body.tenantName);
+    const startDate = body.startDate || (isDraft ? today : body.startDate);
+    const endDate = body.endDate || (isDraft ? today : body.endDate);
+    const monthlyRent = body.monthlyRent || (isDraft ? "0" : body.monthlyRent);
 
     const freq = body.paymentFrequency || "monthly";
     const ownerId = scopeId(user);
@@ -175,6 +182,12 @@ class ContractsController {
       isDraft: Boolean(body.isDraft ?? false),
       isDemo: false,
     }).returning();
+
+    // A draft contract doesn't occupy the unit and generates no installments
+    // until it is finalised.
+    if (isDraft) {
+      return { ...contract, installmentsCreated: 0 };
+    }
 
     await this.db.update(unitsTable).set({ status: "rented" }).where(eq(unitsTable.id, unitId));
 

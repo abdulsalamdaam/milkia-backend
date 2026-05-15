@@ -112,8 +112,11 @@ class UnitsController {
             .where(where)
         : Promise.resolve([{ total: 0 }]),
     ]);
-    if (!usePaginated) return rows;
-    return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
+    // A unit with more than one active contract would be joined into multiple
+    // rows — dedupe by id so each unit appears once.
+    const deduped = Array.from(new Map(rows.map((r) => [r.id, r])).values());
+    if (!usePaginated) return deduped;
+    return { data: deduped, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
 
   @Get("properties/:propertyId/units")
@@ -136,12 +139,16 @@ class UnitsController {
       .where(and(eq(propertiesTable.id, id), eq(propertiesTable.userId, scopeId(user)), isNull(propertiesTable.deletedAt)));
     if (!prop) throw new NotFoundException("Property not found");
 
-    if (!body.unitNumber || !body.type) throw new BadRequestException("رقم الوحدة والنوع مطلوبان");
+    const isDraft = Boolean(body.isDraft ?? false);
+    // Draft units only need a unit number; type falls back to the schema default.
+    if (!body.unitNumber || (!isDraft && !body.type)) {
+      throw new BadRequestException("رقم الوحدة والنوع مطلوبان");
+    }
 
     const values: Record<string, unknown> = { propertyId: id, isDemo: false };
     for (const f of UNIT_FIELDS) values[f] = body[f] ?? null;
     values.unitNumber = body.unitNumber;
-    values.type = body.type;
+    values.type = body.type || "apartment";
     // status is NOT NULL — fall back to the schema default if the loop above
     // set it to null because body.status was undefined.
     if (values.status == null) values.status = "available";
