@@ -30,6 +30,7 @@ import { ContactModule } from "./modules/contact/contact.module";
 import { TeamModule } from "./modules/team/team.module";
 import { InvoiceModule } from "./modules/invoice/invoice.module";
 import { CompaniesModule } from "./modules/companies/companies.module";
+import { PaymentConfirmationsModule } from "./modules/payment-confirmations/payment-confirmations.module";
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { CompaniesModule } from "./modules/companies/companies.module";
     UnitsModule,
     ContractsModule,
     PaymentsModule,
+    PaymentConfirmationsModule,
     AdminModule,
     ProfileModule,
     OwnersModule,
