@@ -50,6 +50,13 @@
       "when": 1779138300000,
       "tag": "0006_property_image",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779138360000,
+      "tag": "0007_property_unit_images",
+      "breakpoints": true
     }
   ]
 }

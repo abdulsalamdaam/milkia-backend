@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -37,8 +37,10 @@ export const propertiesTable = pgTable("properties", {
   ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "set null" }),
   amenitiesData: text("amenities_data"),
   notes: text("notes"),
-  // MinIO object key for the property photo (single PNG).
+  // MinIO object key for the property photo (legacy single image).
   imageKey: text("image_key"),
+  // JSON array of MinIO object keys — the property photo gallery.
+  images: jsonb("images"),
   isDemo: boolean("is_demo").notNull().default(false),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
