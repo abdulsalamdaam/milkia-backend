@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc, sum } from "drizzle-orm";
 import { paymentsTable, contractsTable } from "@milkia/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -21,14 +21,23 @@ class PaymentsController {
   @Get()
   @RequirePermissions(PERMISSIONS.PAYMENTS_VIEW)
   async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
-    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null);
+    const status: string | undefined =
+      typeof rawQuery?.status === "string" && ["paid", "pending", "overdue", "cancelled"].includes(rawQuery.status)
+        ? rawQuery.status
+        : undefined;
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null || status != null);
     const q = listQuerySchema.parse(rawQuery ?? {});
     const baseWhere = and(eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt));
-    const where = q.search ? and(baseWhere, or(
-      ilike(paymentsTable.receiptNumber, `%${q.search}%`),
-      ilike(contractsTable.tenantName, `%${q.search}%`),
-      ilike(contractsTable.contractNumber, `%${q.search}%`),
-    )) : baseWhere;
+    const conds = [baseWhere];
+    if (q.search) {
+      conds.push(or(
+        ilike(paymentsTable.receiptNumber, `%${q.search}%`),
+        ilike(contractsTable.tenantName, `%${q.search}%`),
+        ilike(contractsTable.contractNumber, `%${q.search}%`),
+      ));
+    }
+    if (status) conds.push(eq(paymentsTable.status, status as any));
+    const where = and(...conds);
 
     let rowsQ = this.db
       .select({
@@ -52,11 +61,18 @@ class PaymentsController {
       .$dynamic();
     if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
 
-    const [rows, totalRow] = await Promise.all([
+    const [rows, totalRow, statsRows] = await Promise.all([
       rowsQ,
       usePaginated ? this.db.select({ total: count() }).from(paymentsTable)
         .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
         .where(where) : Promise.resolve([{ total: 0 }]),
+      // Status totals across ALL the user's payments (ignores search/status
+      // filter) so the summary cards stay consistent while the table pages.
+      usePaginated ? this.db.select({
+        status: paymentsTable.status,
+        cnt: count(),
+        amount: sum(paymentsTable.amount),
+      }).from(paymentsTable).where(baseWhere).groupBy(paymentsTable.status) : Promise.resolve([]),
     ]);
 
     const data = rows.map(r => ({
@@ -73,7 +89,17 @@ class PaymentsController {
       contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName } : null,
     }));
     if (!usePaginated) return data;
-    return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
+
+    const stats = { paid: 0, pending: 0, overdue: 0, cancelled: 0,
+      paidCount: 0, pendingCount: 0, overdueCount: 0, cancelledCount: 0 };
+    for (const s of statsRows as Array<{ status: string; cnt: number; amount: string | null }>) {
+      const amt = Number(s.amount ?? 0);
+      if (s.status === "paid")      { stats.paid = amt;      stats.paidCount = Number(s.cnt); }
+      else if (s.status === "pending")   { stats.pending = amt;   stats.pendingCount = Number(s.cnt); }
+      else if (s.status === "overdue")   { stats.overdue = amt;   stats.overdueCount = Number(s.cnt); }
+      else if (s.status === "cancelled") { stats.cancelled = amt; stats.cancelledCount = Number(s.cnt); }
+    }
+    return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0), stats };
   }
 
   @Post()
