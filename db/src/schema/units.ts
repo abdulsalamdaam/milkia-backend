@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, numeric, boolean, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, numeric, boolean, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { propertiesTable } from "./properties";
@@ -39,6 +39,14 @@ export const unitsTable = pgTable("units", {
   unitWidth: numeric("unit_width", { precision: 10, scale: 2 }),
   unitHeight: numeric("unit_height", { precision: 10, scale: 2 }),
   hasMezzanine: boolean("has_mezzanine"),
+  // Attachments — MinIO object keys uploaded via the FileUpload component
+  // and persisted here so the unit detail view can show them again.
+  // imageKey + floorPlanKey are single files; documents is a JSON array of
+  //   { key, originalName, contentType, size }
+  // entries to support multiple uploads.
+  imageKey: text("image_key"),
+  floorPlanKey: text("floor_plan_key"),
+  documents: jsonb("documents"),
   isDemo: boolean("is_demo").notNull().default(false),
   notes: text("notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

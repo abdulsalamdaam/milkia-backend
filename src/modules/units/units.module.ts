@@ -10,7 +10,18 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 
-const UNIT_FIELDS = ["unitNumber", "type", "status", "floor", "area", "bedrooms", "bathrooms", "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter", "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing", "kitchenType", "fiber", "amenities", "unitDirection", "yearBuilt", "finishing", "facadeLength", "unitLength", "unitWidth", "unitHeight", "hasMezzanine", "notes"] as const;
+const UNIT_FIELDS = [
+  "unitNumber", "type", "status", "floor", "area", "bedrooms", "bathrooms",
+  "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
+  "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing",
+  "kitchenType", "fiber", "amenities", "unitDirection", "yearBuilt",
+  "finishing", "facadeLength", "unitLength", "unitWidth", "unitHeight",
+  "hasMezzanine", "notes",
+  // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
+  // The frontend's AddUnitPage was already sending these; the columns now
+  // exist (migration 0003_unit_attachments).
+  "imageKey", "floorPlanKey", "documents",
+] as const;
 
 @ApiTags("units")
 @ApiBearerAuth("user-jwt")
@@ -56,6 +67,10 @@ class UnitsController {
         unitWidth: unitsTable.unitWidth,
         unitHeight: unitsTable.unitHeight,
         hasMezzanine: unitsTable.hasMezzanine,
+        // Attachments — surfaced so the unit detail view can render them.
+        imageKey: unitsTable.imageKey,
+        floorPlanKey: unitsTable.floorPlanKey,
+        documents: unitsTable.documents,
         notes: unitsTable.notes,
         createdAt: unitsTable.createdAt,
         tenantName: contractsTable.tenantName,
