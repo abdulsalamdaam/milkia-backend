@@ -64,6 +64,13 @@
       "when": 1779138420000,
       "tag": "0008_owner_tenant_draft",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1779138480000,
+      "tag": "0009_owner_nationality",
+      "breakpoints": true
     }
   ]
 }

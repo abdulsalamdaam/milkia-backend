@@ -12,7 +12,7 @@ import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 
 const FIELDS = [
-  "name", "type", "status", "idNumber", "phone", "email", "iban",
+  "name", "type", "status", "idNumber", "nationality", "phone", "email", "iban",
   "managementFeePercent", "taxNumber", "address",
   "postalCode", "additionalNumber", "buildingNumber", "notes",
   // Representative (وكيل) fields — added in Phase 4 of the asset-tree redesign.
@@ -71,6 +71,7 @@ class OwnersController {
       name: body.name,
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
+      nationality: body.nationality ?? null,
       phone: body.phone ?? null,
       email: body.email ?? null,
       iban: body.iban ?? null,

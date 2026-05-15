@@ -16,6 +16,7 @@ export const ownersTable = pgTable("owners", {
   name: text("name").notNull(),
   type: ownerTypeEnum("type").notNull().default("individual"),
   idNumber: text("id_number"),
+  nationality: text("nationality"),
   phone: text("phone"),
   email: text("email"),
   iban: text("iban"),
