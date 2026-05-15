@@ -9,6 +9,7 @@ export * from "./units";
 export * from "./contracts";
 export * from "./payments";
 export * from "./paymentConfirmations";
+export * from "./notifications";
 export * from "./maintenance";
 export * from "./support";
 export * from "./owners";
