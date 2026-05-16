@@ -3,7 +3,7 @@ import {
   Patch, Post, Query, BadRequestException, ConflictException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, notInArray, sql, or, ilike, count, asc, desc } from "drizzle-orm";
+import { and, eq, isNull, notInArray, inArray, sql, or, ilike, count, asc, desc } from "drizzle-orm";
 import { deedsTable, propertiesTable, unitsTable } from "@milkia/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -73,15 +73,30 @@ class PropertiesController {
 
     const [rows, totalRow] = await Promise.all([rowsQuery, totalP]);
 
-    const data = await Promise.all(rows.map(async ({ property: prop, deedNumber, deedType }) => {
-      const units = await this.db.select({ status: unitsTable.status }).from(unitsTable)
-        .where(and(eq(unitsTable.propertyId, prop.id), isNull(unitsTable.deletedAt)));
+    // Fetch every page property's units in ONE query (was an N+1 — one
+    // units query per property), then group by propertyId in memory.
+    const propIds = rows.map((r) => r.property.id);
+    const allUnits = propIds.length
+      ? await this.db
+          .select({ propertyId: unitsTable.propertyId, status: unitsTable.status })
+          .from(unitsTable)
+          .where(and(inArray(unitsTable.propertyId, propIds), isNull(unitsTable.deletedAt)))
+      : [];
+    const unitsByProperty = new Map<number, { status: string }[]>();
+    for (const u of allUnits) {
+      const arr = unitsByProperty.get(u.propertyId) ?? [];
+      arr.push({ status: u.status });
+      unitsByProperty.set(u.propertyId, arr);
+    }
+
+    const data = rows.map(({ property: prop, deedNumber, deedType }) => {
+      const units = unitsByProperty.get(prop.id) ?? [];
       const totalUnits = prop.totalUnits || units.length || 0;
-      const rentedUnits = units.filter(u => u.status === "rented").length;
+      const rentedUnits = units.filter((u) => u.status === "rented").length;
       const occupancyRate = totalUnits > 0 ? Math.round((rentedUnits / totalUnits) * 100) : 0;
       const effectiveDeedNumber = deedNumber ?? prop.deedNumber ?? null;
       return { ...prop, occupancyRate, rentedUnits, linkedDeedNumber: deedNumber, linkedDeedType: deedType, effectiveDeedNumber };
-    }));
+    });
 
     if (!usePaginated) return data; // legacy shape
     return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };

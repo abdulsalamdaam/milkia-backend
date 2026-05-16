@@ -37,6 +37,12 @@ function buildPool(): pg.Pool {
   const pool = new Pool({
     connectionString: sanitizedUrl,
     ssl: wantsSsl ? { rejectUnauthorized: false } : undefined,
+    // Keep connections warm so requests don't pay a fresh TCP + SSL
+    // handshake (hundreds of ms) on every burst of traffic.
+    max: 20,
+    idleTimeoutMillis: 60_000,
+    keepAlive: true,
+    connectionTimeoutMillis: 10_000,
   });
 
   pool.on("error", (err) => {
