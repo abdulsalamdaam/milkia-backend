@@ -20,3 +20,4 @@ export * from "./contactSubmissions";
 export * from "./zatcaCredentials";
 export * from "./invoices";
 export * from "./invoiceLines";
+export * from "./lookups";
