@@ -18,6 +18,7 @@ const CONTRACT_FIELDS = [
   "repName", "repIdNumber", "companyUnified", "companyOrgType",
   "signingDate", "signingPlace",
   "startDate", "endDate", "monthlyRent", "paymentFrequency", "depositAmount",
+  "vatEnabled", "escalationRate",
   "agencyFee", "firstPaymentAmount", "additionalFees",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
@@ -71,6 +72,8 @@ class ContractsController {
         monthlyRent: contractsTable.monthlyRent,
         paymentFrequency: contractsTable.paymentFrequency,
         depositAmount: contractsTable.depositAmount,
+        vatEnabled: contractsTable.vatEnabled,
+        escalationRate: contractsTable.escalationRate,
         agencyFee: contractsTable.agencyFee,
         firstPaymentAmount: contractsTable.firstPaymentAmount,
         additionalFees: contractsTable.additionalFees,
@@ -164,6 +167,8 @@ class ContractsController {
       monthlyRent: String(monthlyRent),
       paymentFrequency: freq,
       depositAmount: body.depositAmount ? String(body.depositAmount) : null,
+      vatEnabled: Boolean(body.vatEnabled ?? false),
+      escalationRate: body.escalationRate != null ? String(body.escalationRate) : "0",
       agencyFee: body.agencyFee ? String(body.agencyFee) : null,
       firstPaymentAmount: body.firstPaymentAmount ? String(body.firstPaymentAmount) : null,
       additionalFees,
@@ -191,7 +196,10 @@ class ContractsController {
 
     await this.db.update(unitsTable).set({ status: "rented" }).where(eq(unitsTable.id, unitId));
 
-    const rows = buildInstallments(contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees);
+    const rows = buildInstallments(
+      contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
+      Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
+    );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
 
     return { ...contract, installmentsCreated: rows.length };
@@ -222,6 +230,7 @@ class ContractsController {
       contract.startDate, contract.endDate,
       contract.monthlyRent, freq,
       (contract.additionalFees as FeeEntry[] | null) ?? null,
+      Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
     return { success: true, installmentsCreated: rows.length };

@@ -33,6 +33,10 @@ export const contractsTable = pgTable("contracts", {
   monthlyRent: numeric("monthly_rent", { precision: 12, scale: 2 }).notNull(),
   paymentFrequency: paymentFrequencyEnum("payment_frequency").notNull().default("monthly"),
   depositAmount: numeric("deposit_amount", { precision: 12, scale: 2 }),
+  // VAT (15%) applied to each rent installment, and annual rent escalation
+  // (تصاعد الإيجار) — a percentage compounded once per contract year.
+  vatEnabled: boolean("vat_enabled").notNull().default(false),
+  escalationRate: numeric("escalation_rate", { precision: 5, scale: 2 }).notNull().default("0"),
   // company representative (ممثل المستأجر للشركات)
   repName: text("rep_name"),
   repIdNumber: text("rep_id_number"),
