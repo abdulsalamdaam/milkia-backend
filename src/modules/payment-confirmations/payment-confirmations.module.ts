@@ -146,11 +146,6 @@ export class TenantPaymentConfirmationsController {
 
 /* ─────────────── Landlord side — review ─────────────── */
 
-class ReviewDto {
-  status!: "approved" | "rejected";
-  reviewNote?: string;
-}
-
 @ApiTags("payment-confirmations")
 @ApiBearerAuth("user-jwt")
 @Controller("payment-confirmations")
@@ -264,7 +259,7 @@ export class PaymentConfirmationsController {
   /** Approve (marks the payment paid) or reject a confirmation request. */
   @Patch(":id")
   @RequirePermissions(PERMISSIONS.PAYMENTS_WRITE)
-  async review(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: ReviewDto) {
+  async review(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {
     if (body?.status !== "approved" && body?.status !== "rejected") {
       throw new BadRequestException("الحالة غير صحيحة");
     }
