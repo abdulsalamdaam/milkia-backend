@@ -9,7 +9,7 @@ import { Throttle } from "@nestjs/throttler";
 import { and, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
 import {
   paymentConfirmationsTable, paymentsTable, contractsTable, tenantsTable,
-  unitsTable, propertiesTable,
+  unitsTable, propertiesTable, notificationsTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -292,6 +292,23 @@ export class PaymentConfirmationsController {
           eq(paymentsTable.id, row.paymentId),
           eq(paymentsTable.userId, scopeId(user)),
         ));
+    }
+
+    // Notify the tenant of the landlord's decision so it surfaces in the
+    // mobile app's notifications screen.
+    if (row.tenantId) {
+      const amount = Number(row.amount || 0).toLocaleString("en-US");
+      const approved = body.status === "approved";
+      const note = body.reviewNote?.toString().trim();
+      await this.db.insert(notificationsTable).values({
+        userId: row.userId,
+        tenantId: row.tenantId,
+        type: approved ? "payment_approved" : "payment_rejected",
+        title: approved ? "تم اعتماد الدفعة" : "تم رفض طلب الدفع",
+        body: approved
+          ? `تم اعتماد دفعتك بمبلغ ${amount} ر.س وتسجيلها كمسددة.`
+          : `تم رفض طلب تأكيد الدفع بمبلغ ${amount} ر.س.${note ? ` السبب: ${note}` : ""}`,
+      });
     }
 
     return updated;
