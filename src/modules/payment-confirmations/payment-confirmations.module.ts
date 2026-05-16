@@ -201,6 +201,7 @@ export class PaymentConfirmationsController {
         contractNumber: contractsTable.contractNumber,
         tenantName: tenantsTable.name,
         tenantPhone: tenantsTable.phone,
+        unitId: unitsTable.id,
         unitNumber: unitsTable.unitNumber,
         propertyName: propertiesTable.name,
       })
