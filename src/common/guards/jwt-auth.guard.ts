@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, Inject, UnauthorizedExceptio
 import type { Request } from "express";
 import { JwtService } from "@nestjs/jwt";
 import { and, eq, isNull } from "drizzle-orm";
-import { rolesTable, usersTable } from "@milkia/database";
+import { rolesTable, usersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
 /**

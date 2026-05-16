@@ -9,7 +9,7 @@ import {
   type BuyerSnapshot,
   zatcaCredentialsTable,
   ZATCA_INITIAL_PIH,
-} from "@milkia/database";
+} from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../../database/database.module";
 import { InvoiceBuilderService, type InvoiceLineInput, todayIsoDate, todayIsoTime } from "./invoice-builder.service";
 import { InvoiceSignerService } from "./invoice-signer.service";

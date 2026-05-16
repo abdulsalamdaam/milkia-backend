@@ -1,5 +1,5 @@
 import { Global, Module } from "@nestjs/common";
-import { db, schema } from "@milkia/database";
+import { db, schema } from "@oqudk/database";
 
 export const DRIZZLE = Symbol("DRIZZLE");
 

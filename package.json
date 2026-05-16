@@ -1,5 +1,5 @@
 {
-  "name": "milkia-api",
+  "name": "oqudk-api",
   "version": "1.0.0",
   "private": true,
   "description": "Milkia property-management API (NestJS + Drizzle).",

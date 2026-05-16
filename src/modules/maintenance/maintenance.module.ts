@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, asc, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
-import { maintenanceRequestsTable, contractsTable, unitsTable, propertiesTable, tenantsTable } from "@milkia/database";
+import { maintenanceRequestsTable, contractsTable, unitsTable, propertiesTable, tenantsTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";

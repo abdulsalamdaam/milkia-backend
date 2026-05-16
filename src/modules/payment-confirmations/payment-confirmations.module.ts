@@ -10,7 +10,7 @@ import { and, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
 import {
   paymentConfirmationsTable, paymentsTable, contractsTable, tenantsTable,
   unitsTable, propertiesTable,
-} from "@milkia/database";
+} from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";

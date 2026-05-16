@@ -1,4 +1,4 @@
-# Deploying milkia-api on Coolify
+# Deploying oqudk-api on Coolify
 
 ## Resource type
 **Application → Dockerfile**. Source: this repo. Branch: `main`.

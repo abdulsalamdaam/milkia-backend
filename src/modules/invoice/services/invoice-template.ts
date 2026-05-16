@@ -1,4 +1,4 @@
-import type { Invoice, InvoiceLine, ZatcaResponse } from "@milkia/database";
+import type { Invoice, InvoiceLine, ZatcaResponse } from "@oqudk/database";
 
 /**
  * Bilingual invoice HTML template (Arabic / English) used to print PDFs.

@@ -8,7 +8,7 @@ import {
 } from "@nestjs/common";
 import bcrypt from "bcryptjs";
 import { eq, and, asc, isNotNull, isNull } from "drizzle-orm";
-import { rolesTable, usersTable, type User } from "@milkia/database";
+import { rolesTable, usersTable, type User } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
 type Public = Omit<User, "passwordHash">;

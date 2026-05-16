@@ -21,8 +21,8 @@
     "types": ["node", "multer", "express"],
     "baseUrl": ".",
     "paths": {
-      "@milkia/database": ["./db/src/index"],
-      "@milkia/database/schema": ["./db/src/schema/index"]
+      "@oqudk/database": ["./db/src/index"],
+      "@oqudk/database/schema": ["./db/src/schema/index"]
     }
   },
   "include": ["src", "db/src"]
