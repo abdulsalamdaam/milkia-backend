@@ -13,6 +13,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
+import { resolveLookupId } from "../../common/lookups-resolve";
 
 /** When the caller is an employee, list their owner's data. Top-level users see their own. */
 function scopeId(user: AuthUser): number {
@@ -205,10 +206,10 @@ class PropertiesController {
       buildingType: body.buildingType ?? null,
       usageType: body.usageType ?? null,
       region: body.region ?? null,
-      typeLookupId: body.typeLookupId ?? null,
-      usageLookupId: body.usageLookupId ?? null,
-      regionLookupId: body.regionLookupId ?? null,
-      cityLookupId: body.cityLookupId ?? null,
+      typeLookupId: body.typeLookupId ?? await resolveLookupId(this.db, "property_type", type),
+      usageLookupId: body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType),
+      regionLookupId: body.regionLookupId ?? await resolveLookupId(this.db, "region", body.region),
+      cityLookupId: body.cityLookupId ?? await resolveLookupId(this.db, "city", city),
       postalCode: body.postalCode ?? null,
       buildingNumber: body.buildingNumber ?? null,
       additionalNumber: body.additionalNumber ?? null,
@@ -254,6 +255,11 @@ class PropertiesController {
     const updateData: Record<string, unknown> = {};
     const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
+    // Keep the lookup FKs in sync when the matching text field changes.
+    if (body.type !== undefined) updateData.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", body.type);
+    if (body.usageType !== undefined) updateData.usageLookupId = body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType);
+    if (body.region !== undefined) updateData.regionLookupId = body.regionLookupId ?? await resolveLookupId(this.db, "region", body.region);
+    if (body.city !== undefined) updateData.cityLookupId = body.cityLookupId ?? await resolveLookupId(this.db, "city", body.city);
     if (body.ownerId !== undefined) {
       updateData["ownerId"] = body.ownerId === null ? null : (typeof body.ownerId === "number" ? body.ownerId : parseInt(String(body.ownerId), 10));
     }

@@ -11,6 +11,7 @@ import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
+import { resolveLookupId } from "../../common/lookups-resolve";
 
 const FIELDS = [
   "name", "type", "status", "idNumber", "nationality", "phone", "email", "iban",
@@ -77,7 +78,7 @@ class OwnersController {
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
       nationality: body.nationality ?? null,
-      nationalityLookupId: body.nationalityLookupId ?? null,
+      nationalityLookupId: body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality),
       phone: body.phone ?? null,
       email: body.email ?? null,
       iban: body.iban ?? null,
@@ -111,6 +112,7 @@ class OwnersController {
     const id = parseInt(ownerId, 10);
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
+    if (body.nationality !== undefined) updateData.nationalityLookupId = body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality);
     const [owner] = await this.db.update(ownersTable).set(updateData)
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)))
       .returning();

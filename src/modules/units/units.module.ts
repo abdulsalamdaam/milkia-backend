@@ -11,6 +11,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { assertWithinQuota } from "../../common/quota";
+import { resolveLookupId } from "../../common/lookups-resolve";
 
 const UNIT_FIELDS = [
   "unitNumber", "type", "status", "floor", "area", "bedrooms", "bathrooms",
@@ -161,6 +162,10 @@ class UnitsController {
     // status is NOT NULL — fall back to the schema default if the loop above
     // set it to null because body.status was undefined.
     if (values.status == null) values.status = "available";
+    // Keep the lookup FKs authoritative.
+    values.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", values.type);
+    values.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
+    values.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
 
     const [unit] = await this.db.insert(unitsTable).values(values as any).returning();
     return unit;
@@ -179,6 +184,9 @@ class UnitsController {
     if (!unit0) throw new NotFoundException("Unit not found");
     const updateData: Record<string, unknown> = {};
     for (const f of UNIT_FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
+    if (body.type !== undefined) updateData.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type);
+    if (body.unitDirection !== undefined) updateData.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
+    if (body.finishing !== undefined) updateData.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
     const [unit] = await this.db.update(unitsTable).set(updateData).where(eq(unitsTable.id, id)).returning();
     return unit;
   }
