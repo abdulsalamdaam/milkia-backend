@@ -23,6 +23,8 @@ const FIELDS = [
   // column is still updatable above for backwards compat.
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
   "isDraft",
+  // Lookups-FK refactor — FK id alongside the legacy `nationality` text.
+  "nationalityLookupId",
 ] as const;
 
 @ApiTags("owners")
@@ -75,6 +77,7 @@ class OwnersController {
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
       nationality: body.nationality ?? null,
+      nationalityLookupId: body.nationalityLookupId ?? null,
       phone: body.phone ?? null,
       email: body.email ?? null,
       iban: body.iban ?? null,

@@ -23,6 +23,8 @@ const UNIT_FIELDS = [
   // The frontend's AddUnitPage was already sending these; the columns now
   // exist (migration 0003_unit_attachments).
   "imageKey", "floorPlanKey", "documents", "images", "isDraft",
+  // Lookups-FK refactor — FK ids alongside the legacy text columns.
+  "typeLookupId", "directionLookupId", "finishingLookupId",
 ] as const;
 
 @ApiTags("units")

@@ -205,6 +205,10 @@ class PropertiesController {
       buildingType: body.buildingType ?? null,
       usageType: body.usageType ?? null,
       region: body.region ?? null,
+      typeLookupId: body.typeLookupId ?? null,
+      usageLookupId: body.usageLookupId ?? null,
+      regionLookupId: body.regionLookupId ?? null,
+      cityLookupId: body.cityLookupId ?? null,
       postalCode: body.postalCode ?? null,
       buildingNumber: body.buildingNumber ?? null,
       additionalNumber: body.additionalNumber ?? null,
@@ -248,7 +252,7 @@ class PropertiesController {
     const id = parseInt(propertyId, 10);
     const owner = scopeId(user);
     const updateData: Record<string, unknown> = {};
-    const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft"];
+    const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
     if (body.ownerId !== undefined) {
       updateData["ownerId"] = body.ownerId === null ? null : (typeof body.ownerId === "number" ? body.ownerId : parseInt(String(body.ownerId), 10));
