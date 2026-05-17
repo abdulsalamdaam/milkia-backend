@@ -37,6 +37,7 @@ class LookupsController {
       labelAr: lookupsTable.labelAr,
       labelEn: lookupsTable.labelEn,
       sortOrder: lookupsTable.sortOrder,
+      parentKey: lookupsTable.parentKey,
       companyId: lookupsTable.companyId,
     })
       .from(lookupsTable)

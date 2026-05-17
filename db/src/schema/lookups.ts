@@ -20,6 +20,9 @@ export const lookupsTable = pgTable("lookups", {
   labelEn: text("label_en").notNull(),
   sortOrder: integer("sort_order").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
+  // Optional parent option key — lets a category cascade from another
+  // (e.g. a "city" row points at its "region" key).
+  parentKey: text("parent_key"),
   // null = global/system option; set = a specific company's custom option.
   companyId: integer("company_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
