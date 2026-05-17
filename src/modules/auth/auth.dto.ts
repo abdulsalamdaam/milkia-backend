@@ -47,6 +47,11 @@ export class RegisterDto {
   @IsOptional()
   @IsString()
   company?: string;
+
+  /** Account holder type — "individual" | "company". */
+  @IsOptional()
+  @IsIn(["individual", "company"])
+  userType?: "individual" | "company";
 }
 
 export class ForgotPasswordDto {

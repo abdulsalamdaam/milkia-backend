@@ -313,8 +313,9 @@ export class AuthService {
    * row stays well-formed. If/when password login is re-enabled, users can
    * set a real password via a future "set password" flow.
    */
-  async register(input: { email: string; password?: string; name: string; phone?: string; company?: string }) {
+  async register(input: { email: string; password?: string; name: string; phone?: string; company?: string; userType?: "individual" | "company" }) {
     const { email, password, name, phone } = input;
+    const userType = input.userType === "company" ? "company" : "individual";
     if (!email || !name) throw new BadRequestException("الاسم والبريد الإلكتروني مطلوبة");
 
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email.toLowerCase()), isNull(usersTable.deletedAt)));
@@ -341,6 +342,7 @@ export class AuthService {
       accountStatus: "pending",
       phone: phone ?? null,
       roleId: userRoleRow?.id ?? null,
+      userType,
     }).returning();
 
     void this.email.sendWelcome(user!.email, user!.name);

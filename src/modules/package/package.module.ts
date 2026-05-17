@@ -22,12 +22,12 @@ class PackageController {
   async myPackage(@CurrentUser() user: AuthUser) {
     const ownerId = scopeId(user);
     const [owner] = await this.db
-      .select({ packagePlan: usersTable.packagePlan })
+      .select({ packagePlan: usersTable.packagePlan, userType: usersTable.userType })
       .from(usersTable)
       .where(eq(usersTable.id, ownerId));
     const plan = resolvePackage(owner?.packagePlan);
     const usage = await packageUsage(this.db, ownerId);
-    return { plan, usage };
+    return { plan, usage, userType: owner?.userType ?? "individual" };
   }
 }
 
