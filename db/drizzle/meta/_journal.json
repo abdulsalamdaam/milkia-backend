@@ -148,6 +148,13 @@
       "when": 1779139140000,
       "tag": "0020_seed_city_lookups",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1779139200000,
+      "tag": "0021_seed_lookup_categories",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,56 @@
+-- Phase 2 of the lookups-FK refactor: seed the missing lookup
+-- categories (region, building_type, furnishing, nationality). Idempotent.
+INSERT INTO "lookups" ("category", "key", "label_ar", "label_en", "sort_order", "company_id")
+SELECT v.category, v.key, v.label_ar, v.label_en, v.sort_order, NULL
+FROM (VALUES
+  ('region', 'riyadh', 'منطقة الرياض', 'Riyadh Region', 1),
+  ('region', 'makkah', 'منطقة مكة المكرمة', 'Makkah Region', 2),
+  ('region', 'eastern', 'المنطقة الشرقية', 'Eastern Region', 3),
+  ('region', 'madinah', 'منطقة المدينة المنورة', 'Madinah Region', 4),
+  ('region', 'asir', 'منطقة عسير', 'Asir Region', 5),
+  ('region', 'tabuk', 'منطقة تبوك', 'Tabuk Region', 6),
+  ('region', 'qassim', 'منطقة القصيم', 'Qassim Region', 7),
+  ('region', 'hail', 'منطقة حائل', 'Hail Region', 8),
+  ('region', 'jazan', 'منطقة جازان', 'Jazan Region', 9),
+  ('region', 'najran', 'منطقة نجران', 'Najran Region', 10),
+  ('region', 'bahah', 'منطقة الباحة', 'Al-Bahah Region', 11),
+  ('region', 'jawf', 'منطقة الجوف', 'Al-Jawf Region', 12),
+  ('region', 'northern_borders', 'منطقة الحدود الشمالية', 'Northern Borders Region', 13),
+  ('building_type', 'residential_building', 'مبنى سكني', 'Residential building', 14),
+  ('building_type', 'commercial_building', 'مبنى تجاري', 'Commercial building', 15),
+  ('building_type', 'mixed_use', 'مبنى متعدد الاستخدام', 'Mixed-use building', 16),
+  ('building_type', 'villa', 'فيلا', 'Villa', 17),
+  ('building_type', 'tower', 'برج', 'Tower', 18),
+  ('building_type', 'compound', 'مجمع سكني', 'Residential compound', 19),
+  ('furnishing', 'fully', 'مفروشة بالكامل', 'Fully furnished', 20),
+  ('furnishing', 'partial', 'مفروشة جزئياً', 'Partially furnished', 21),
+  ('furnishing', 'none', 'غير مفروشة', 'Unfurnished', 22),
+  ('nationality', 'saudi', 'سعودي', 'Saudi', 1),
+  ('nationality', 'egyptian', 'مصري', 'Egyptian', 2),
+  ('nationality', 'yemeni', 'يمني', 'Yemeni', 3),
+  ('nationality', 'sudanese', 'سوداني', 'Sudanese', 4),
+  ('nationality', 'syrian', 'سوري', 'Syrian', 5),
+  ('nationality', 'jordanian', 'أردني', 'Jordanian', 6),
+  ('nationality', 'palestinian', 'فلسطيني', 'Palestinian', 7),
+  ('nationality', 'lebanese', 'لبناني', 'Lebanese', 8),
+  ('nationality', 'iraqi', 'عراقي', 'Iraqi', 9),
+  ('nationality', 'emirati', 'إماراتي', 'Emirati', 10),
+  ('nationality', 'kuwaiti', 'كويتي', 'Kuwaiti', 11),
+  ('nationality', 'bahraini', 'بحريني', 'Bahraini', 12),
+  ('nationality', 'qatari', 'قطري', 'Qatari', 13),
+  ('nationality', 'omani', 'عُماني', 'Omani', 14),
+  ('nationality', 'indian', 'هندي', 'Indian', 15),
+  ('nationality', 'pakistani', 'باكستاني', 'Pakistani', 16),
+  ('nationality', 'bangladeshi', 'بنغلاديشي', 'Bangladeshi', 17),
+  ('nationality', 'filipino', 'فلبيني', 'Filipino', 18),
+  ('nationality', 'indonesian', 'إندونيسي', 'Indonesian', 19),
+  ('nationality', 'ethiopian', 'إثيوبي', 'Ethiopian', 20),
+  ('nationality', 'american', 'أمريكي', 'American', 21),
+  ('nationality', 'british', 'بريطاني', 'British', 22),
+  ('nationality', 'french', 'فرنسي', 'French', 23),
+  ('nationality', 'turkish', 'تركي', 'Turkish', 24),
+  ('nationality', 'other', 'أخرى', 'Other', 25)
+) AS v(category, key, label_ar, label_en, sort_order)
+WHERE NOT EXISTS (
+  SELECT 1 FROM "lookups" l WHERE l.category = v.category AND l.key = v.key AND l.company_id IS NULL
+);
