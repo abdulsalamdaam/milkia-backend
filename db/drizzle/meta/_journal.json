@@ -127,6 +127,20 @@
       "when": 1779138960000,
       "tag": "0017_seed_type_lookups",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1779139020000,
+      "tag": "0018_user_package_plan",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1779139080000,
+      "tag": "0019_audit_logs",
+      "breakpoints": true
     }
   ]
 }

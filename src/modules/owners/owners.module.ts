@@ -10,6 +10,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
+import { assertWithinQuota } from "../../common/quota";
 
 const FIELDS = [
   "name", "type", "status", "idNumber", "nationality", "phone", "email", "iban",
@@ -66,6 +67,8 @@ class OwnersController {
   @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
   async create(@CurrentUser() user: AuthUser, @Body() body: any) {
     if (!body.name) throw new BadRequestException("الاسم مطلوب");
+    // Enforce the subscription package's landlord quota.
+    await assertWithinQuota(this.db, scopeId(user), "landlords");
     const [owner] = await this.db.insert(ownersTable).values({
       userId: scopeId(user),
       name: body.name,

@@ -37,6 +37,12 @@ export const usersTable = pgTable("users", {
   companyId: integer("company_id"),
   /** FK → roles.id. Source of role key + permissions + label. */
   roleId: integer("role_id"),
+  /**
+   * Subscription package — "individual_owner" | "broker". Drives the
+   * landlord/property/unit quota limits (see src/common/packages.ts).
+   * Only meaningful on a top-level account; employees inherit the owner's.
+   */
+  packagePlan: text("package_plan").notNull().default("broker"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

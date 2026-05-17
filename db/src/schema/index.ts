@@ -22,3 +22,4 @@ export * from "./zatcaCredentials";
 export * from "./invoices";
 export * from "./invoiceLines";
 export * from "./lookups";
+export * from "./auditLogs";

@@ -394,12 +394,23 @@ export class AuthService {
         roleId: usersTable.roleId,
         roleKey: rolesTable.key,
         companyName: companiesTable.name,
+        ownerUserId: usersTable.ownerUserId,
+        packagePlan: usersTable.packagePlan,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .leftJoin(companiesTable, eq(usersTable.companyId, companiesTable.id))
       .where(eq(usersTable.id, userId));
     if (!row) throw new UnauthorizedException("User not found");
+    // Employees inherit the owner account's subscription package.
+    let packagePlan = row.packagePlan;
+    if (row.ownerUserId) {
+      const [owner] = await this.db
+        .select({ p: usersTable.packagePlan })
+        .from(usersTable)
+        .where(eq(usersTable.id, row.ownerUserId));
+      packagePlan = owner?.p ?? packagePlan;
+    }
     return {
       id: row.id,
       email: row.email,
@@ -411,6 +422,7 @@ export class AuthService {
       company: row.companyName,
       companyId: row.companyId,
       roleId: row.roleId,
+      packagePlan,
       loginCount: row.loginCount,
       lastLoginAt: row.lastLoginAt,
       createdAt: row.createdAt,

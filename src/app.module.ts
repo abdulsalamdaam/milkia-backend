@@ -33,6 +33,8 @@ import { CompaniesModule } from "./modules/companies/companies.module";
 import { LookupsModule } from "./modules/lookups/lookups.module";
 import { PaymentConfirmationsModule } from "./modules/payment-confirmations/payment-confirmations.module";
 import { NotificationsModule } from "./modules/notifications/notifications.module";
+import { PackageModule } from "./modules/package/package.module";
+import { AuditModule } from "./modules/audit/audit.module";
 
 @Module({
   imports: [
@@ -75,6 +77,8 @@ import { NotificationsModule } from "./modules/notifications/notifications.modul
     InvoiceModule,
     CompaniesModule,
     LookupsModule,
+    PackageModule,
+    AuditModule,
   ],
   providers: [
     // OtpThrottlerGuard extends ThrottlerGuard with two improvements: (1) it

@@ -10,6 +10,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { assertWithinQuota } from "../../common/quota";
 
 const UNIT_FIELDS = [
   "unitNumber", "type", "status", "floor", "area", "bedrooms", "bathrooms",
@@ -141,6 +142,9 @@ class UnitsController {
     const [prop] = await this.db.select().from(propertiesTable)
       .where(and(eq(propertiesTable.id, id), eq(propertiesTable.userId, scopeId(user)), isNull(propertiesTable.deletedAt)));
     if (!prop) throw new NotFoundException("Property not found");
+
+    // Enforce the subscription package's unit quota.
+    await assertWithinQuota(this.db, scopeId(user), "units");
 
     const isDraft = Boolean(body.isDraft ?? false);
     // Draft units only need a unit number; type falls back to the schema default.

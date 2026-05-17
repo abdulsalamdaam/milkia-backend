@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable, rolesTable, companiesTable } from "@oqudk/database";
+import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable, rolesTable, companiesTable, ownersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { SuperAdminGuard } from "../../common/guards/roles.guard";
@@ -96,6 +96,7 @@ class AdminController {
         isActive: usersTable.isActive,
         phone: usersTable.phone,
         createdAt: usersTable.createdAt,
+        packagePlan: usersTable.packagePlan,
         roleKey: rolesTable.key,
         companyName: companiesTable.name,
       })
@@ -338,6 +339,7 @@ class AdminController {
         accountStatus: usersTable.accountStatus,
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
+        packagePlan: usersTable.packagePlan,
         roleKey: rolesTable.key,
         companyName: companiesTable.name,
       })
@@ -370,17 +372,53 @@ class AdminController {
     return { count: c };
   }
 
+  /**
+   * Ensure an individual-owner account has its single landlord record —
+   * the account holder is his own sole landlord. Idempotent.
+   */
+  private async ensureSoleLandlord(user: typeof usersTable.$inferSelect) {
+    const [existing] = await this.db.select({ id: ownersTable.id })
+      .from(ownersTable)
+      .where(and(eq(ownersTable.userId, user.id), isNull(ownersTable.deletedAt)))
+      .limit(1);
+    if (existing) return;
+    await this.db.insert(ownersTable).values({
+      userId: user.id,
+      name: user.name,
+      type: "individual",
+      phone: user.phone ?? null,
+      email: user.email,
+      status: "active",
+    });
+  }
+
   @Patch("registrations/:id/approve")
-  async approve(@Param("id") id: string) {
+  async approve(@Param("id") id: string, @Body() body: { packagePlan?: string } | undefined) {
     const uid = parseInt(id, 10);
+    const plan = body?.packagePlan === "individual_owner" ? "individual_owner" : "broker";
     const [user] = await this.db.update(usersTable)
-      .set({ accountStatus: "active", isActive: true })
+      .set({ accountStatus: "active", isActive: true, packagePlan: plan })
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
+    if (plan === "individual_owner") await this.ensureSoleLandlord(user);
     // Fire-and-forget the approval notice — must not block the API response.
     void this.email.sendRegistrationApproved(user.email, user.name);
-    return { success: true, id: user.id, accountStatus: user.accountStatus };
+    return { success: true, id: user.id, accountStatus: user.accountStatus, packagePlan: plan };
+  }
+
+  /** Change a user's subscription package at any time. */
+  @Patch("users/:userId/package")
+  async changePackage(@Param("userId") userId: string, @Body() body: { packagePlan?: string }) {
+    const id = parseInt(userId, 10);
+    const plan = body?.packagePlan === "individual_owner" ? "individual_owner" : "broker";
+    const [user] = await this.db.update(usersTable)
+      .set({ packagePlan: plan })
+      .where(eq(usersTable.id, id))
+      .returning();
+    if (!user) throw new NotFoundException("User not found");
+    if (plan === "individual_owner") await this.ensureSoleLandlord(user);
+    return { success: true, id: user.id, packagePlan: plan };
   }
 
   @Patch("registrations/:id/reject")

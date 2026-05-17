@@ -12,6 +12,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { listQuerySchema } from "../../common/pagination";
+import { assertWithinQuota } from "../../common/quota";
 
 /** When the caller is an employee, list their owner's data. Top-level users see their own. */
 function scopeId(user: AuthUser): number {
@@ -151,6 +152,8 @@ class PropertiesController {
     }
 
     const owner = scopeId(user);
+    // Enforce the subscription package's property quota.
+    await assertWithinQuota(this.db, owner, "properties");
     const deedId = body.deedId == null ? null : (typeof body.deedId === "number" ? body.deedId : parseInt(String(body.deedId), 10));
 
     // Validate the deed belongs to this scope and isn't already linked to
