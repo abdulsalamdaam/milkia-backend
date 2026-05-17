@@ -4,7 +4,7 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, notInArray, inArray, sql, or, ilike, count, asc, desc } from "drizzle-orm";
-import { deedsTable, propertiesTable, unitsTable } from "@oqudk/database";
+import { deedsTable, propertiesTable, unitsTable, usersTable, ownersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -171,8 +171,25 @@ class PropertiesController {
       if (clash) throw new ConflictException("الصك مرتبط بعقار آخر · This deed is already linked to another property");
     }
 
+    // Resolve the landlord. Individual-owner accounts have a single sole
+    // landlord (themselves) — auto-link it when the form sends none.
+    let ownerId: number | null = body.ownerId != null ? Number(body.ownerId) : null;
+    if (ownerId == null) {
+      const [u] = await this.db.select({ packagePlan: usersTable.packagePlan })
+        .from(usersTable).where(eq(usersTable.id, owner));
+      if (u?.packagePlan === "individual_owner") {
+        const [soleOwner] = await this.db.select({ id: ownersTable.id })
+          .from(ownersTable)
+          .where(and(eq(ownersTable.userId, owner), isNull(ownersTable.deletedAt)))
+          .orderBy(asc(ownersTable.id))
+          .limit(1);
+        ownerId = soleOwner?.id ?? null;
+      }
+    }
+
     const [prop] = await this.db.insert(propertiesTable).values({
       userId: owner,
+      ownerId,
       name,
       type,
       city,
