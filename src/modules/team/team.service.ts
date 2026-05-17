@@ -87,23 +87,34 @@ export class TeamService {
 
   async createEmployee(
     actorId: number,
-    input: { name: string; email: string; phone?: string; password: string; preset?: string },
+    input: { name: string; email: string; phone?: string; password?: string; preset?: string },
   ): Promise<Public> {
     const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
     if (!actor) throw new NotFoundException("Actor not found");
     this.assertCanManageTeam(actor);
 
     const email = input.email.trim().toLowerCase();
-    if (!email || !input.password || input.password.length < 6) {
-      throw new BadRequestException("Email and a password of at least 6 characters are required");
+    if (!email) throw new BadRequestException("Email is required");
+
+    // One-employee cap for now.
+    const team = await this.db.select({ id: usersTable.id }).from(usersTable)
+      .where(and(eq(usersTable.ownerUserId, actorId), isNotNull(usersTable.ownerUserId), isNull(usersTable.deletedAt)));
+    if (team.length >= 1) {
+      throw new BadRequestException("لا يمكن إضافة أكثر من موظف واحد حالياً · You can only add one employee");
     }
+
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
     if (existing.length) throw new ConflictException("A user with this email already exists");
 
     const roleId = await this.resolveRoleId(input.preset);
     if (!roleId) throw new BadRequestException(`Unknown role preset: ${input.preset}`);
 
-    const passwordHash = await bcrypt.hash(input.password, 10);
+    // Password is optional — the app logs in via email-OTP. When none is
+    // given, store an unguessable random hash.
+    const effectivePassword = input.password && input.password.length >= 6
+      ? input.password
+      : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
+    const passwordHash = await bcrypt.hash(effectivePassword, 10);
     const [created] = await this.db
       .insert(usersTable)
       .values({

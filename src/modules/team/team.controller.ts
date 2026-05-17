@@ -4,12 +4,12 @@ import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { TeamService } from "./team.service";
-import { IsArray, IsBoolean, IsEmail, IsOptional, IsString, MinLength } from "class-validator";
+import { IsArray, IsBoolean, IsEmail, IsOptional, IsString } from "class-validator";
 
 class CreateEmployeeDto {
   @IsString() name!: string;
   @IsEmail() email!: string;
-  @IsString() @MinLength(6) password!: string;
+  @IsOptional() @IsString() password?: string;
   @IsOptional() @IsString() phone?: string;
   @IsOptional() @IsString() preset?: string;
   @IsOptional() @IsArray() permissions?: string[];
