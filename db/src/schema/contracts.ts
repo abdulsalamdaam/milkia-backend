@@ -1,7 +1,6 @@
 import { pgTable, text, serial, timestamp, integer, numeric, boolean, date, pgEnum, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
-import { unitsTable } from "./units";
 import { usersTable } from "./users";
 
 export const contractStatusEnum = pgEnum("contract_status", ["active", "expired", "terminated", "pending"]);
@@ -10,7 +9,8 @@ export const paymentFrequencyEnum = pgEnum("payment_frequency", ["monthly", "qua
 export const contractsTable = pgTable("contracts", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
-  unitId: integer("unit_id").notNull().references(() => unitsTable.id, { onDelete: "cascade" }),
+  // A contract's units live in the `contract_units` join table — a contract
+  // can span many units. Rent below is one combined figure for all of them.
   contractNumber: text("contract_number").notNull().unique(),
   // tenant
   tenantType: text("tenant_type"),

@@ -2,8 +2,8 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Inject, M
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, IsString, MinLength } from "class-validator";
 import { Throttle } from "@nestjs/throttler";
-import { and, desc, eq, sql } from "drizzle-orm";
-import { contractsTable, paymentsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { contractsTable, contractUnitsTable, paymentsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
@@ -66,7 +66,7 @@ export class TenantPortalController {
   async contracts(@CurrentTenant() tenant: TenantPayload) {
     const [t] = await this.db.select().from(tenantsTable).where(eq(tenantsTable.id, tenant.id));
     if (!t || !t.phone) return [];
-    return this.db
+    const rows = await this.db
       .select({
         id: contractsTable.id,
         contractNumber: contractsTable.contractNumber,
@@ -77,13 +77,6 @@ export class TenantPortalController {
         depositAmount: contractsTable.depositAmount,
         status: contractsTable.status,
         notes: contractsTable.notes,
-        unitId: contractsTable.unitId,
-        unitNumber: unitsTable.unitNumber,
-        propertyId: propertiesTable.id,
-        propertyName: propertiesTable.name,
-        propertyCity: propertiesTable.city,
-        propertyDistrict: propertiesTable.district,
-        propertyType: propertiesTable.type,
         landlordName: contractsTable.landlordName,
         landlordPhone: contractsTable.landlordPhone,
         landlordEmail: contractsTable.landlordEmail,
@@ -92,10 +85,51 @@ export class TenantPortalController {
         additionalFees: contractsTable.additionalFees,
       })
       .from(contractsTable)
-      .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-      .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .where(eq(contractsTable.tenantPhone, t.phone))
       .orderBy(desc(contractsTable.createdAt));
+
+    // A contract can span many units — fetch them via contract_units and
+    // attach a `units` array, plus a primary unit/property surface so
+    // older single-unit clients keep rendering.
+    const unitsByContract = new Map<number, any[]>();
+    if (rows.length > 0) {
+      const unitRows = await this.db
+        .select({
+          contractId: contractUnitsTable.contractId,
+          unitId: unitsTable.id,
+          unitNumber: unitsTable.unitNumber,
+          propertyId: propertiesTable.id,
+          propertyName: propertiesTable.name,
+          propertyCity: propertiesTable.city,
+          propertyDistrict: propertiesTable.district,
+          propertyType: propertiesTable.type,
+        })
+        .from(contractUnitsTable)
+        .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+        .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+        .where(inArray(contractUnitsTable.contractId, rows.map((r) => r.id)))
+        .orderBy(contractUnitsTable.id);
+      for (const u of unitRows) {
+        const list = unitsByContract.get(u.contractId) ?? [];
+        list.push(u);
+        unitsByContract.set(u.contractId, list);
+      }
+    }
+    return rows.map((row) => {
+      const units = unitsByContract.get(row.id) ?? [];
+      const first: any = units[0] ?? null;
+      return {
+        ...row,
+        units,
+        unitId: first?.unitId ?? null,
+        unitNumber: first?.unitNumber ?? null,
+        propertyId: first?.propertyId ?? null,
+        propertyName: first?.propertyName ?? null,
+        propertyCity: first?.propertyCity ?? null,
+        propertyDistrict: first?.propertyDistrict ?? null,
+        propertyType: first?.propertyType ?? null,
+      };
+    });
   }
 
   /* ── Payments schedule across all tenant's contracts ── */
@@ -143,23 +177,26 @@ export class TenantPortalController {
     if (!t || !t.phone) throw new BadRequestException("رقم الجوال غير مسجّل");
 
     const [contract] = await this.db
-      .select({
-        id: contractsTable.id,
-        userId: contractsTable.userId,
-        unitId: contractsTable.unitId,
-        unitNumber: unitsTable.unitNumber,
-        propertyName: propertiesTable.name,
-      })
+      .select({ id: contractsTable.id, userId: contractsTable.userId })
       .from(contractsTable)
-      .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-      .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .where(and(eq(contractsTable.id, body.contractId), eq(contractsTable.tenantPhone, t.phone)));
 
     if (!contract) throw new NotFoundException("العقد غير موجود");
 
-    const unitLabel = contract.propertyName && contract.unitNumber
-      ? `${contract.propertyName} — ${contract.unitNumber}`
-      : (contract.unitNumber || `Unit ${contract.unitId}`);
+    // The contract may span several units — label the ticket with the
+    // property name plus every unit number it covers.
+    const unitRows = await this.db
+      .select({ unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
+      .from(contractUnitsTable)
+      .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+      .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+      .where(eq(contractUnitsTable.contractId, contract.id))
+      .orderBy(contractUnitsTable.id);
+    const unitNumbers = unitRows.map((u) => u.unitNumber).filter(Boolean).join("، ");
+    const propertyName = unitRows[0]?.propertyName ?? null;
+    const unitLabel = propertyName && unitNumbers
+      ? `${propertyName} — ${unitNumbers}`
+      : (unitNumbers || `Unit (contract ${contract.id})`);
 
     const [row] = await this.db.insert(maintenanceRequestsTable).values({
       userId: contract.userId,

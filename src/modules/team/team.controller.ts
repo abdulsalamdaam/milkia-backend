@@ -51,6 +51,15 @@ export class TeamController {
     return this.team.updateEmployee(user.id, id, body);
   }
 
+  @Patch("employees/:id/permissions")
+  updatePermissions(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseIntPipe) id: number,
+    @Body() body: { permissions: string[] },
+  ) {
+    return this.team.updateEmployeePermissions(user.id, id, body?.permissions ?? []);
+  }
+
   @Delete("employees/:id")
   remove(@CurrentUser() user: AuthUser, @Param("id", ParseIntPipe) id: number) {
     return this.team.deleteEmployee(user.id, id);

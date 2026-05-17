@@ -15,6 +15,7 @@ import {
   RegisterDto,
   ForgotPasswordDto,
   ResetPasswordDto,
+  ChangePasswordDto,
   TenantOtpStartDto,
   TenantOtpVerifyDto,
   EmailOtpRequestDto,
@@ -97,6 +98,15 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   logout(@CurrentUser() user: AuthUser) {
     return this.auth.logoutUser(user.id);
+  }
+
+  /** Change the logged-in user's own password. */
+  @Post("me/change-password")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 10, ttl: 3600_000 } })
+  @UseGuards(JwtAuthGuard)
+  changePassword(@CurrentUser() user: AuthUser, @Body() body: ChangePasswordDto) {
+    return this.auth.changePassword(user.id, body.currentPassword ?? "", body.newPassword);
   }
 
   /* ── User: forgot/reset password (OTP-based) ── */

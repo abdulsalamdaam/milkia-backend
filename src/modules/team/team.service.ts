@@ -53,20 +53,36 @@ export class TeamService {
     return r?.id ?? null;
   }
 
-  async listEmployees(actorId: number): Promise<Public[]> {
+  async listEmployees(actorId: number) {
     const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
     if (!actor) throw new NotFoundException("Actor not found");
     this.assertCanManageTeam(actor);
 
-    const rows = await this.db
-      .select()
+    // Join the role so the UI gets the live role key, label and the
+    // effective permission list (permissions live on the role row).
+    return this.db
+      .select({
+        id: usersTable.id,
+        email: usersTable.email,
+        name: usersTable.name,
+        phone: usersTable.phone,
+        isActive: usersTable.isActive,
+        accountStatus: usersTable.accountStatus,
+        ownerUserId: usersTable.ownerUserId,
+        roleId: usersTable.roleId,
+        lastLoginAt: usersTable.lastLoginAt,
+        createdAt: usersTable.createdAt,
+        role: rolesTable.key,
+        roleLabel: rolesTable.labelAr,
+        permissions: rolesTable.permissions,
+      })
       .from(usersTable)
+      .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(
         eq(usersTable.ownerUserId, actorId),
         isNotNull(usersTable.ownerUserId),
         isNull(usersTable.deletedAt),
       ));
-    return rows.map(strip);
   }
 
   async createEmployee(
@@ -133,6 +149,50 @@ export class TeamService {
       .set(updates)
       .where(eq(usersTable.id, employeeId))
       .returning();
+    return strip(updated!);
+  }
+
+  /**
+   * Set an employee's exact permission list. Permissions live on `roles`,
+   * so this maintains a dedicated company-scoped role per employee
+   * (`emp_custom_<id>`) and points the employee at it — letting an owner
+   * grant or remove individual permissions without touching the shared
+   * preset roles.
+   */
+  async updateEmployeePermissions(actorId: number, employeeId: number, permissions: string[]): Promise<Public> {
+    const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
+    if (!actor) throw new NotFoundException("Actor not found");
+    this.assertCanManageTeam(actor);
+
+    const [emp] = await this.db.select().from(usersTable).where(eq(usersTable.id, employeeId));
+    if (!emp || emp.ownerUserId !== actorId) throw new NotFoundException("Employee not found");
+
+    const clean = Array.from(new Set((permissions || []).filter((p) => typeof p === "string" && p.trim())));
+    const key = `emp_custom_${employeeId}`;
+    const companyId = actor.companyId ?? null;
+
+    const [existingRole] = await this.db
+      .select()
+      .from(rolesTable)
+      .where(and(
+        eq(rolesTable.key, key),
+        companyId == null ? isNull(rolesTable.companyId) : eq(rolesTable.companyId, companyId),
+      ))
+      .limit(1);
+
+    let roleId: number;
+    if (existingRole) {
+      await this.db.update(rolesTable).set({ permissions: clean }).where(eq(rolesTable.id, existingRole.id));
+      roleId = existingRole.id;
+    } else {
+      const [created] = await this.db
+        .insert(rolesTable)
+        .values({ key, labelAr: "صلاحيات مخصصة", labelEn: "Custom permissions", permissions: clean, isSystem: false, companyId })
+        .returning();
+      roleId = created!.id;
+    }
+
+    const [updated] = await this.db.update(usersTable).set({ roleId }).where(eq(usersTable.id, employeeId)).returning();
     return strip(updated!);
   }
 

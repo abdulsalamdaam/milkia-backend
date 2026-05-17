@@ -6,10 +6,10 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags, ApiBearerAuth, ApiConsumes } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { and, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, ilike, count } from "drizzle-orm";
 import {
-  paymentConfirmationsTable, paymentsTable, contractsTable, tenantsTable,
-  unitsTable, propertiesTable, notificationsTable,
+  paymentConfirmationsTable, paymentsTable, contractsTable, contractUnitsTable,
+  tenantsTable, unitsTable, propertiesTable, notificationsTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -201,16 +201,11 @@ export class PaymentConfirmationsController {
         contractNumber: contractsTable.contractNumber,
         tenantName: tenantsTable.name,
         tenantPhone: tenantsTable.phone,
-        unitId: unitsTable.id,
-        unitNumber: unitsTable.unitNumber,
-        propertyName: propertiesTable.name,
       })
       .from(paymentConfirmationsTable)
       .leftJoin(paymentsTable, eq(paymentConfirmationsTable.paymentId, paymentsTable.id))
       .leftJoin(contractsTable, eq(paymentConfirmationsTable.contractId, contractsTable.id))
       .leftJoin(tenantsTable, eq(paymentConfirmationsTable.tenantId, tenantsTable.id))
-      .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-      .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .where(where)
       .orderBy(desc(paymentConfirmationsTable.createdAt))
       .$dynamic();
@@ -230,13 +225,49 @@ export class PaymentConfirmationsController {
         .groupBy(paymentConfirmationsTable.status) : Promise.resolve([]),
     ]);
 
-    if (!usePaginated) return rows;
+    // A contract can span many units — attach them via contract_units
+    // without multiplying the confirmation rows, plus a primary
+    // unit/property surface for single-unit display.
+    const contractIds = Array.from(new Set(rows.map((r) => r.contractId).filter((v): v is number => v != null)));
+    const unitsByContract = new Map<number, any[]>();
+    if (contractIds.length > 0) {
+      const unitRows = await this.db
+        .select({
+          contractId: contractUnitsTable.contractId,
+          unitId: unitsTable.id,
+          unitNumber: unitsTable.unitNumber,
+          propertyName: propertiesTable.name,
+        })
+        .from(contractUnitsTable)
+        .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+        .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+        .where(inArray(contractUnitsTable.contractId, contractIds))
+        .orderBy(contractUnitsTable.id);
+      for (const u of unitRows) {
+        const list = unitsByContract.get(u.contractId) ?? [];
+        list.push(u);
+        unitsByContract.set(u.contractId, list);
+      }
+    }
+    const enriched = rows.map((row) => {
+      const units = row.contractId != null ? (unitsByContract.get(row.contractId) ?? []) : [];
+      const first: any = units[0] ?? null;
+      return {
+        ...row,
+        units,
+        unitId: first?.unitId ?? null,
+        unitNumber: first?.unitNumber ?? null,
+        propertyName: first?.propertyName ?? null,
+      };
+    });
+
+    if (!usePaginated) return enriched;
 
     const stats = { pending: 0, approved: 0, rejected: 0 };
     for (const s of statsRows as Array<{ status: string; cnt: number }>) {
       if (s.status in stats) stats[s.status as keyof typeof stats] = Number(s.cnt);
     }
-    return { data: rows, page, pageSize, total: Number(totalRow[0]?.total ?? 0), stats };
+    return { data: enriched, page, pageSize, total: Number(totalRow[0]?.total ?? 0), stats };
   }
 
   /** Signed URL to view/download the proof attachment. */

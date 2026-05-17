@@ -1,6 +1,6 @@
 import bcrypt from "bcryptjs";
 import { and, eq, isNull } from "drizzle-orm";
-import { db, usersTable, rolesTable, propertiesTable, unitsTable, contractsTable, paymentsTable } from "./index";
+import { db, usersTable, rolesTable, propertiesTable, unitsTable, contractsTable, contractUnitsTable, paymentsTable } from "./index";
 
 async function findRoleId(key: string): Promise<number | null> {
   const [r] = await db
@@ -121,7 +121,6 @@ async function seed() {
 
   const contracts = await db.insert(contractsTable).values(rentedUnits.map((unit, i) => ({
     userId: demoUserId,
-    unitId: unit.id,
     contractNumber: `EQ-2024-${100 + i}`,
     tenantName: tenants[i]!.name,
     tenantIdNumber: tenants[i]!.idNumber,
@@ -134,6 +133,12 @@ async function seed() {
     status: "active" as const,
     isDemo: true,
   }))).returning();
+
+  // Link each demo contract to its unit via the contract_units join table.
+  await db.insert(contractUnitsTable).values(contracts.map((contract, i) => ({
+    contractId: contract.id,
+    unitId: rentedUnits[i]!.id,
+  })));
 
   const cm = String(today.getMonth() + 1).padStart(2, "0");
   const pm = today.getMonth() === 0 ? "12" : String(today.getMonth()).padStart(2, "0");

@@ -3,21 +3,16 @@ import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { propertiesTable } from "./properties";
 
-export const unitTypeEnum = pgEnum("unit_type", [
-  "apartment", "villa", "office", "shop", "warehouse", "studio",
-  "duplex", "building", "tower", "annex", "apartmentWithAnnex", "floorWithAnnex",
-  "rooftopVilla", "driverRoom", "chalet", "sharedRoom", "hotelRoom",
-  "traditionalHouse", "twoFloorApartment", "plaza", "mall", "floor", "kiosk",
-  "workshop", "land", "leasedLand", "station", "showroom", "atm", "cinema",
-  "powerStation", "telecomTower", "hotel", "parkingLot",
-]);
+// Unit `type` is plain text, driven by the central `lookups` table
+// (category "unit_type") so the option list is editable and supports an
+// "Other" free-text value — see migration 0016.
 export const unitStatusEnum = pgEnum("unit_status", ["available", "rented", "maintenance", "reserved"]);
 
 export const unitsTable = pgTable("units", {
   id: serial("id").primaryKey(),
   propertyId: integer("property_id").notNull().references(() => propertiesTable.id, { onDelete: "cascade" }),
   unitNumber: text("unit_number").notNull(),
-  type: unitTypeEnum("type").notNull().default("apartment"),
+  type: text("type").notNull().default("apartment"),
   status: unitStatusEnum("status").notNull().default("available"),
   floor: integer("floor"),
   area: numeric("area", { precision: 10, scale: 2 }),

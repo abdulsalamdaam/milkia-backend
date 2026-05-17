@@ -86,7 +86,7 @@ WHERE NOT EXISTS (
 INSERT INTO properties (user_id, name, type, status, city, district, street, total_units, floors, building_type, region, building_number, is_demo, owner_id)
 SELECT
   u.id,
-  v.name, v.ptype::property_type, 'active'::property_status,
+  v.name, v.ptype, 'active'::property_status,
   v.city, v.district, v.street, 1, v.floors, v.btype, v.region, v.bnum, true,
   (SELECT o.id FROM owners o WHERE o.user_id = u.id LIMIT 1)
 FROM (VALUES
@@ -103,7 +103,7 @@ WHERE NOT EXISTS (
 INSERT INTO units (property_id, unit_number, type, status, floor, area, bedrooms, bathrooms, living_rooms, parking_spaces, rent_price, is_demo)
 SELECT
   p.id,
-  v.unit_number, v.utype::unit_type, 'rented'::unit_status,
+  v.unit_number, v.utype, 'rented'::unit_status,
   v.floor, v.area, v.bedrooms, v.bathrooms, v.living_rooms, v.parking, v.rent, true
 FROM (VALUES
   ('برج الراشد السكني',   'A-101', 'apartment', 5, 120.50, 3, 2, 1, 1, 5500.00),
@@ -115,10 +115,10 @@ WHERE NOT EXISTS (
   SELECT 1 FROM units u WHERE u.property_id = p.id AND u.unit_number = v.unit_number
 );
 
--- 7. Contracts (one per user, linking the unit + tenant) ────────────
-INSERT INTO contracts (user_id, unit_id, contract_number, tenant_type, tenant_name, tenant_id_number, tenant_phone, tenant_email, tenant_nationality, signing_date, signing_place, start_date, end_date, monthly_rent, payment_frequency, deposit_amount, status, is_demo, landlord_name, landlord_id_number)
+-- 7. Contracts (one per user, linking the tenant) ───────────────────
+INSERT INTO contracts (user_id, contract_number, tenant_type, tenant_name, tenant_id_number, tenant_phone, tenant_email, tenant_nationality, signing_date, signing_place, start_date, end_date, monthly_rent, payment_frequency, deposit_amount, status, is_demo, landlord_name, landlord_id_number)
 SELECT
-  u.id, un.id,
+  u.id,
   v.contract_number, v.tenant_type, v.tenant_name, v.tenant_id, v.tenant_phone, v.tenant_email, v.tenant_nat,
   v.sign_date::date, v.sign_place,
   v.start_date::date, v.end_date::date,
@@ -131,9 +131,21 @@ FROM (VALUES
   ('khalid@seed.test', 'C-301', 'C-2026-0003', 'company',    'شركة الحلول التقنية',    '7011223344', '+966563333333', 'tech-solutions@seed.test',  'سعودية', '2026-03-01', 'الدمام', '2026-03-15', '2028-03-14', 4500.00,  'annual',    9000.00,  'خالد الدوسري', '1010333333')
 ) AS v(user_email, unit_number, contract_number, tenant_type, tenant_name, tenant_id, tenant_phone, tenant_email, tenant_nat, sign_date, sign_place, start_date, end_date, monthly_rent, freq, deposit, landlord_name, landlord_id)
 JOIN users u ON u.email = v.user_email
+ON CONFLICT (contract_number) DO NOTHING;
+
+-- 7b. Link each contract to its unit via the contract_units join table.
+INSERT INTO contract_units (contract_id, unit_id)
+SELECT c.id, un.id
+FROM (VALUES
+  ('C-2026-0001', 'ahmed@seed.test',  'A-101'),
+  ('C-2026-0002', 'fatima@seed.test', 'V-1'),
+  ('C-2026-0003', 'khalid@seed.test', 'C-301')
+) AS v(contract_number, user_email, unit_number)
+JOIN contracts c ON c.contract_number = v.contract_number
+JOIN users u ON u.email = v.user_email
 JOIN properties p ON p.user_id = u.id
 JOIN units un ON un.property_id = p.id AND un.unit_number = v.unit_number
-ON CONFLICT (contract_number) DO NOTHING;
+ON CONFLICT (contract_id, unit_id) DO NOTHING;
 
 COMMIT;
 

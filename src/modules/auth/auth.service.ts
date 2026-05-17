@@ -425,6 +425,25 @@ export class AuthService {
     return { success: true, message: "تم تسجيل الخروج. تم إنهاء جميع الجلسات." };
   }
 
+  /* ── User: change own password (while logged in) ── */
+  async changePassword(userId: number, currentPassword: string, newPassword: string) {
+    if (!newPassword || newPassword.length < 6) {
+      throw new BadRequestException("كلمة المرور الجديدة يجب أن تكون 6 أحرف على الأقل");
+    }
+    const [user] = await this.db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!user) throw new UnauthorizedException("User not found");
+
+    // Verify the current password before allowing a change.
+    const ok = await bcrypt.compare(currentPassword || "", user.passwordHash);
+    if (!ok) throw new BadRequestException("كلمة المرور الحالية غير صحيحة");
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    // The current session keeps working — tokenVersion is left untouched so
+    // the user isn't logged out by changing their own password.
+    await this.db.update(usersTable).set({ passwordHash }).where(eq(usersTable.id, userId));
+    return { success: true, message: "تم تغيير كلمة المرور بنجاح" };
+  }
+
   /* ── User: forgot/reset password via Twilio Verify OTP ── */
   async forgotPassword(input: { identifier: string; channel?: "sms" | "email" | "call" | "whatsapp" }) {
     const id = input.identifier.trim();

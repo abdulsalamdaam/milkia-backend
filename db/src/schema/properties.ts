@@ -5,14 +5,16 @@ import { usersTable } from "./users";
 import { ownersTable } from "./owners";
 import { deedsTable } from "./deeds";
 
-export const propertyTypeEnum = pgEnum("property_type", ["residential", "commercial", "mixed", "land", "villa", "apartment_building", "tower", "plaza", "mall", "chalet", "other"]);
+// Property `type` is plain text, driven by the central `lookups` table
+// (category "property_type") so the option list is editable and supports
+// an "Other" free-text value — see migration 0016.
 export const propertyStatusEnum = pgEnum("property_status", ["active", "inactive", "maintenance"]);
 
 export const propertiesTable = pgTable("properties", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  type: propertyTypeEnum("type").notNull().default("residential"),
+  type: text("type").notNull().default("residential"),
   status: propertyStatusEnum("status").notNull().default("active"),
   city: text("city").notNull(),
   district: text("district"),

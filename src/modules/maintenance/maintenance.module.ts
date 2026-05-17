@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, asc, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
-import { maintenanceRequestsTable, contractsTable, unitsTable, propertiesTable, tenantsTable } from "@oqudk/database";
+import { maintenanceRequestsTable, contractsTable, contractUnitsTable, unitsTable, propertiesTable, tenantsTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -55,14 +55,10 @@ class MaintenanceController {
         tenantName: tenantsTable.name,
         tenantPhone: tenantsTable.phone,
         contractNumber: contractsTable.contractNumber,
-        unitNumber: unitsTable.unitNumber,
-        propertyName: propertiesTable.name,
       })
       .from(maintenanceRequestsTable)
       .leftJoin(tenantsTable, eq(maintenanceRequestsTable.tenantId, tenantsTable.id))
       .leftJoin(contractsTable, eq(maintenanceRequestsTable.contractId, contractsTable.id))
-      .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-      .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .where(where)
       .orderBy((q.order === "asc" ? asc : desc)(maintenanceRequestsTable.createdAt))
       .$dynamic();
@@ -100,20 +96,27 @@ class MaintenanceController {
           id: contractsTable.id,
           userId: contractsTable.userId,
           tenantPhone: contractsTable.tenantPhone,
-          unitNumber: unitsTable.unitNumber,
-          propertyName: propertiesTable.name,
         })
         .from(contractsTable)
-        .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-        .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
         .where(and(eq(contractsTable.id, contractId), eq(contractsTable.userId, ownerId)));
 
       if (!contract) throw new NotFoundException("العقد غير موجود");
 
       if (!unitLabel) {
-        unitLabel = contract.propertyName && contract.unitNumber
-          ? `${contract.propertyName} — ${contract.unitNumber}`
-          : (contract.unitNumber || `Unit (contract ${contract.id})`);
+        // The contract may cover several units — label with the property
+        // name plus every unit number.
+        const unitRows = await this.db
+          .select({ unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
+          .from(contractUnitsTable)
+          .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+          .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+          .where(eq(contractUnitsTable.contractId, contract.id))
+          .orderBy(contractUnitsTable.id);
+        const unitNumbers = unitRows.map((u) => u.unitNumber).filter(Boolean).join("، ");
+        const propertyName = unitRows[0]?.propertyName ?? null;
+        unitLabel = propertyName && unitNumbers
+          ? `${propertyName} — ${unitNumbers}`
+          : (unitNumbers || `Unit (contract ${contract.id})`);
       }
 
       if (!tenantId && contract.tenantPhone) {
@@ -166,10 +169,12 @@ class MaintenanceController {
       if (row.contractId) {
         const [p] = await this.db
           .select({ propertyName: propertiesTable.name })
-          .from(contractsTable)
-          .leftJoin(unitsTable, eq(contractsTable.unitId, unitsTable.id))
-          .leftJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
-          .where(eq(contractsTable.id, row.contractId));
+          .from(contractUnitsTable)
+          .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+          .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+          .where(eq(contractUnitsTable.contractId, row.contractId))
+          .orderBy(contractUnitsTable.id)
+          .limit(1);
         propertyName = p?.propertyName ?? null;
       }
       const payload = {

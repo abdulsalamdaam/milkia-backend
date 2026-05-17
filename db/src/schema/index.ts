@@ -7,6 +7,7 @@ export * from "./deeds";
 export * from "./properties";
 export * from "./units";
 export * from "./contracts";
+export * from "./contractUnits";
 export * from "./payments";
 export * from "./paymentConfirmations";
 export * from "./notifications";

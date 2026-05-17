@@ -94,3 +94,13 @@ export class TenantOtpVerifyDto {
   @IsIn(["sms", "call", "whatsapp"])
   channel?: "sms" | "call" | "whatsapp";
 }
+
+export class ChangePasswordDto {
+  @IsOptional()
+  @IsString()
+  currentPassword?: string;
+
+  @IsString()
+  @MinLength(6)
+  newPassword!: string;
+}

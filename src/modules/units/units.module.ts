@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { listQuerySchema } from "../../common/pagination";
-import { unitsTable, propertiesTable, contractsTable } from "@oqudk/database";
+import { unitsTable, propertiesTable, contractsTable, contractUnitsTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -94,8 +94,11 @@ class UnitsController {
       })
       .from(unitsTable)
       .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
+      // A unit's active contract is reached through the contract_units
+      // join table now that a contract can span many units.
+      .leftJoin(contractUnitsTable, eq(contractUnitsTable.unitId, unitsTable.id))
       .leftJoin(contractsTable, and(
-        eq(contractsTable.unitId, unitsTable.id),
+        eq(contractsTable.id, contractUnitsTable.contractId),
         eq(contractsTable.status, "active"),
         isNull(contractsTable.deletedAt),
       ))

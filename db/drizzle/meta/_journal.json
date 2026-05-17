@@ -106,6 +106,27 @@
       "when": 1779138780000,
       "tag": "0014_contract_vat_escalation",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1779138840000,
+      "tag": "0015_contract_units",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1779138900000,
+      "tag": "0016_type_columns_to_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1779138960000,
+      "tag": "0017_seed_type_lookups",
+      "breakpoints": true
     }
   ]
 }
