@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, integer, numeric, boolean, pgEnum, js
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { propertiesTable } from "./properties";
+import { lookupsTable } from "./lookups";
 
 // Unit `type` is plain text, driven by the central `lookups` table
 // (category "unit_type") so the option list is editable and supports an
@@ -54,6 +55,10 @@ export const unitsTable = pgTable("units", {
   isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   notes: text("notes"),
+  // Lookups-FK refactor (phase 3) — backfilled from the text columns.
+  typeLookupId: integer("type_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  directionLookupId: integer("direction_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  finishingLookupId: integer("finishing_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

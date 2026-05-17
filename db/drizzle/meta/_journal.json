@@ -162,6 +162,13 @@
       "when": 1779139260000,
       "tag": "0022_lookup_parent_key",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1779139320000,
+      "tag": "0023_lookup_fk_columns",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { ownersTable } from "./owners";
 import { deedsTable } from "./deeds";
+import { lookupsTable } from "./lookups";
 
 // Property `type` is plain text, driven by the central `lookups` table
 // (category "property_type") so the option list is editable and supports
@@ -45,6 +46,12 @@ export const propertiesTable = pgTable("properties", {
   images: jsonb("images"),
   isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
+  // Lookups-FK refactor (phase 3) — populated from the text columns
+  // above; the text columns remain the source of truth until phase 6.
+  typeLookupId: integer("type_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  usageLookupId: integer("usage_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  regionLookupId: integer("region_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  cityLookupId: integer("city_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
