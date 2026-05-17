@@ -4,6 +4,7 @@ import { IsIn, IsInt, IsOptional, IsString, MinLength } from "class-validator";
 import { Throttle } from "@nestjs/throttler";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { contractsTable, contractUnitsTable, paymentsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
+import { attachLookupLabels } from "../../common/lookups-resolve";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
@@ -100,15 +101,19 @@ export class TenantPortalController {
           unitNumber: unitsTable.unitNumber,
           propertyId: propertiesTable.id,
           propertyName: propertiesTable.name,
-          propertyCity: propertiesTable.city,
+          propertyCityLookupId: propertiesTable.cityLookupId,
           propertyDistrict: propertiesTable.district,
-          propertyType: propertiesTable.type,
+          propertyTypeLookupId: propertiesTable.typeLookupId,
         })
         .from(contractUnitsTable)
         .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
         .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
         .where(inArray(contractUnitsTable.contractId, rows.map((r) => r.id)))
         .orderBy(contractUnitsTable.id);
+      await attachLookupLabels(this.db, unitRows as any[], [
+        { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
+        { idField: "propertyCityLookupId", out: "propertyCity", mode: "labelAr" },
+      ]);
       for (const u of unitRows) {
         const list = unitsByContract.get(u.contractId) ?? [];
         list.push(u);

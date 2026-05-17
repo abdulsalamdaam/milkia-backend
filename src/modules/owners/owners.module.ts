@@ -11,10 +11,12 @@ import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
-import { resolveLookupId } from "../../common/lookups-resolve";
+import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolve";
+
+const OWNER_LOOKUP_SPEC = [{ idField: "nationalityLookupId", out: "nationality", mode: "labelAr" as const }];
 
 const FIELDS = [
-  "name", "type", "status", "idNumber", "nationality", "phone", "email", "iban",
+  "name", "type", "status", "idNumber", "phone", "email", "iban",
   "managementFeePercent", "taxNumber", "address",
   "postalCode", "additionalNumber", "buildingNumber", "notes",
   // Representative (وكيل) fields — added in Phase 4 of the asset-tree redesign.
@@ -24,7 +26,7 @@ const FIELDS = [
   // column is still updatable above for backwards compat.
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
   "isDraft",
-  // Lookups-FK refactor — FK id alongside the legacy `nationality` text.
+  // Lookups-FK refactor — nationality is now FK-only.
   "nationalityLookupId",
 ] as const;
 
@@ -62,6 +64,7 @@ class OwnersController {
         ? this.db.select({ total: count() }).from(ownersTable).where(where)
         : Promise.resolve([{ total: 0 }]),
     ]);
+    await attachLookupLabels(this.db, rows, OWNER_LOOKUP_SPEC);
     if (!usePaginated) return rows;
     return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -77,7 +80,6 @@ class OwnersController {
       name: body.name,
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
-      nationality: body.nationality ?? null,
       nationalityLookupId: body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality),
       phone: body.phone ?? null,
       email: body.email ?? null,
@@ -103,7 +105,7 @@ class OwnersController {
       isDraft: Boolean(body.isDraft ?? false),
       isDemo: "false",
     }).returning();
-    return owner;
+    return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
   }
 
   @Patch(":ownerId")
@@ -117,7 +119,7 @@ class OwnersController {
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)))
       .returning();
     if (!owner) throw new NotFoundException("Owner not found");
-    return owner;
+    return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
   }
 
   @Delete(":ownerId")

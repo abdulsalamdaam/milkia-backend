@@ -6,6 +6,7 @@ import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, desc, asc, ilike, or, sql, count } from "drizzle-orm";
 import { z } from "zod/v4";
 import { deedsTable, propertiesTable } from "@oqudk/database";
+import { attachLookupLabels } from "../../common/lookups-resolve";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -128,11 +129,12 @@ class DeedsController {
     const [property] = await this.db.select({
       id: propertiesTable.id,
       name: propertiesTable.name,
-      city: propertiesTable.city,
+      cityLookupId: propertiesTable.cityLookupId,
       district: propertiesTable.district,
     })
     .from(propertiesTable)
     .where(and(eq(propertiesTable.deedId, deed.id), isNull(propertiesTable.deletedAt)));
+    if (property) await attachLookupLabels(this.db, [property as any], [{ idField: "cityLookupId", out: "city", mode: "labelAr" }]);
 
     return { ...deed, property: property ?? null };
   }

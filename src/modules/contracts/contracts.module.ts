@@ -11,6 +11,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { buildInstallments, type FeeEntry } from "./installments";
+import { attachLookupLabels } from "../../common/lookups-resolve";
 
 const CONTRACT_FIELDS = [
   "tenantType", "tenantName", "tenantIdNumber", "tenantPhone", "tenantNationality", "tenantEmail",
@@ -46,13 +47,13 @@ class ContractsController {
         contractId: contractUnitsTable.contractId,
         unit: unitsTable,
         propertyName: propertiesTable.name,
-        propertyType: propertiesTable.type,
+        propertyTypeLookupId: propertiesTable.typeLookupId,
         propertyBuildingType: propertiesTable.buildingType,
-        propertyUsageType: propertiesTable.usageType,
+        propertyUsageLookupId: propertiesTable.usageLookupId,
         propertyFloors: propertiesTable.floors,
         propertyElevators: propertiesTable.elevators,
         propertyParkings: propertiesTable.parkings,
-        propertyCity: propertiesTable.city,
+        propertyCityLookupId: propertiesTable.cityLookupId,
         propertyDistrict: propertiesTable.district,
         propertyTotalUnits: propertiesTable.totalUnits,
       })
@@ -66,18 +67,27 @@ class ContractsController {
       list.push({
         ...r.unit,
         propertyName: r.propertyName,
-        propertyType: r.propertyType,
+        propertyTypeLookupId: r.propertyTypeLookupId,
         propertyBuildingType: r.propertyBuildingType,
-        propertyUsageType: r.propertyUsageType,
+        propertyUsageLookupId: r.propertyUsageLookupId,
         propertyFloors: r.propertyFloors,
         propertyElevators: r.propertyElevators,
         propertyParkings: r.propertyParkings,
-        propertyCity: r.propertyCity,
+        propertyCityLookupId: r.propertyCityLookupId,
         propertyDistrict: r.propertyDistrict,
         propertyTotalUnits: r.propertyTotalUnits,
       });
       map.set(r.contractId, list);
     }
+    // Resolve the lookup FKs back to the text fields the clients expect.
+    await attachLookupLabels(this.db, [...map.values()].flat(), [
+      { idField: "typeLookupId", out: "type", mode: "key" },
+      { idField: "directionLookupId", out: "unitDirection", mode: "key" },
+      { idField: "finishingLookupId", out: "finishing", mode: "key" },
+      { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
+      { idField: "propertyUsageLookupId", out: "propertyUsageType", mode: "key" },
+      { idField: "propertyCityLookupId", out: "propertyCity", mode: "labelAr" },
+    ]);
     return map;
   }
 

@@ -15,9 +15,9 @@ export const propertiesTable = pgTable("properties", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
-  type: text("type").notNull().default("residential"),
+  // type / city / usageType / region dropped (0024) — now FK-only via the
+  // *_lookup_id columns below.
   status: propertyStatusEnum("status").notNull().default("active"),
-  city: text("city").notNull(),
   district: text("district"),
   street: text("street"),
   // Legacy free-text deed number kept for backwards-compat with rows created
@@ -32,8 +32,6 @@ export const propertiesTable = pgTable("properties", {
   parkings: integer("parkings"),
   yearBuilt: integer("year_built"),
   buildingType: text("building_type"),
-  usageType: text("usage_type"),
-  region: text("region"),
   postalCode: text("postal_code"),
   buildingNumber: text("building_number"),
   additionalNumber: text("additional_number"),

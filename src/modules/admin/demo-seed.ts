@@ -6,8 +6,6 @@ export async function seedDemoData(db: Drizzle, demoUserId: number): Promise<voi
   const [prop1] = await db.insert(propertiesTable).values({
     userId: demoUserId,
     name: "برج العليا السكني",
-    type: "residential",
-    city: "الرياض",
     district: "العليا",
     street: "شارع العليا الرئيسي",
     totalUnits: 6,
@@ -18,8 +16,6 @@ export async function seedDemoData(db: Drizzle, demoUserId: number): Promise<voi
   const [prop2] = await db.insert(propertiesTable).values({
     userId: demoUserId,
     name: "مجمع الرياض التجاري",
-    type: "commercial",
-    city: "الرياض",
     district: "العليا",
     street: "طريق الملك فهد",
     totalUnits: 2,
@@ -28,15 +24,15 @@ export async function seedDemoData(db: Drizzle, demoUserId: number): Promise<voi
   }).returning();
 
   const units1 = await db.insert(unitsTable).values([
-    { propertyId: prop1!.id, unitNumber: "101", type: "apartment", status: "rented", floor: 1, bedrooms: 3, bathrooms: 2, area: "120.00", rentPrice: "2500.00", isDemo: true },
-    { propertyId: prop1!.id, unitNumber: "102", type: "apartment", status: "rented", floor: 1, bedrooms: 2, bathrooms: 1, area: "90.00", rentPrice: "1800.00", isDemo: true },
-    { propertyId: prop1!.id, unitNumber: "201", type: "apartment", status: "available", floor: 2, bedrooms: 3, bathrooms: 2, area: "120.00", rentPrice: "2600.00", isDemo: true },
-    { propertyId: prop1!.id, unitNumber: "202", type: "apartment", status: "rented", floor: 2, bedrooms: 4, bathrooms: 3, area: "150.00", rentPrice: "3200.00", isDemo: true },
+    { propertyId: prop1!.id, unitNumber: "101", status: "rented", floor: 1, bedrooms: 3, bathrooms: 2, area: "120.00", rentPrice: "2500.00", isDemo: true },
+    { propertyId: prop1!.id, unitNumber: "102", status: "rented", floor: 1, bedrooms: 2, bathrooms: 1, area: "90.00", rentPrice: "1800.00", isDemo: true },
+    { propertyId: prop1!.id, unitNumber: "201", status: "available", floor: 2, bedrooms: 3, bathrooms: 2, area: "120.00", rentPrice: "2600.00", isDemo: true },
+    { propertyId: prop1!.id, unitNumber: "202", status: "rented", floor: 2, bedrooms: 4, bathrooms: 3, area: "150.00", rentPrice: "3200.00", isDemo: true },
   ]).returning();
 
   const units2 = await db.insert(unitsTable).values([
-    { propertyId: prop2!.id, unitNumber: "A01", type: "office", status: "rented", floor: 1, area: "80.00", rentPrice: "3500.00", isDemo: true },
-    { propertyId: prop2!.id, unitNumber: "B01", type: "shop", status: "available", floor: 1, area: "60.00", rentPrice: "2800.00", isDemo: true },
+    { propertyId: prop2!.id, unitNumber: "A01", status: "rented", floor: 1, area: "80.00", rentPrice: "3500.00", isDemo: true },
+    { propertyId: prop2!.id, unitNumber: "B01", status: "available", floor: 1, area: "60.00", rentPrice: "2800.00", isDemo: true },
   ]).returning();
 
   const today = new Date();

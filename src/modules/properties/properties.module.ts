@@ -13,7 +13,15 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
-import { resolveLookupId } from "../../common/lookups-resolve";
+import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolve";
+
+/** Maps property `*_lookup_id` FKs back to the text fields clients expect. */
+const PROPERTY_LOOKUP_SPEC = [
+  { idField: "typeLookupId", out: "type", mode: "key" as const },
+  { idField: "usageLookupId", out: "usageType", mode: "key" as const },
+  { idField: "regionLookupId", out: "region", mode: "labelAr" as const },
+  { idField: "cityLookupId", out: "city", mode: "labelAr" as const },
+];
 
 /** When the caller is an employee, list their owner's data. Top-level users see their own. */
 function scopeId(user: AuthUser): number {
@@ -41,7 +49,6 @@ class PropertiesController {
     const where = q.search
       ? and(baseWhere, or(
           ilike(propertiesTable.name, `%${q.search}%`),
-          ilike(propertiesTable.city, `%${q.search}%`),
           ilike(propertiesTable.district, `%${q.search}%`),
           ilike(propertiesTable.deedNumber, `%${q.search}%`),
           ilike(deedsTable.deedNumber, `%${q.search}%`),
@@ -100,6 +107,7 @@ class PropertiesController {
       return { ...prop, occupancyRate, rentedUnits, linkedDeedNumber: deedNumber, linkedDeedType: deedType, effectiveDeedNumber };
     });
 
+    await attachLookupLabels(this.db, data, PROPERTY_LOOKUP_SPEC);
     if (!usePaginated) return data; // legacy shape
     return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -192,8 +200,6 @@ class PropertiesController {
       userId: owner,
       ownerId,
       name,
-      type,
-      city,
       district: body.district ?? null,
       street: body.street ?? null,
       deedNumber: body.deedNumber ?? null,
@@ -204,8 +210,6 @@ class PropertiesController {
       parkings: body.parkings ? parseInt(body.parkings) : null,
       yearBuilt: body.yearBuilt ? parseInt(body.yearBuilt) : null,
       buildingType: body.buildingType ?? null,
-      usageType: body.usageType ?? null,
-      region: body.region ?? null,
       typeLookupId: body.typeLookupId ?? await resolveLookupId(this.db, "property_type", type),
       usageLookupId: body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType),
       regionLookupId: body.regionLookupId ?? await resolveLookupId(this.db, "region", body.region),
@@ -221,7 +225,8 @@ class PropertiesController {
       isDemo: false,
     }).returning();
 
-    return { ...prop, occupancyRate: 0, rentedUnits: 0 };
+    const [withLabels] = await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC);
+    return { ...withLabels, occupancyRate: 0, rentedUnits: 0 };
   }
 
   @Get(":propertyId")
@@ -244,7 +249,8 @@ class PropertiesController {
         .where(and(eq(deedsTable.id, prop.deedId), isNull(deedsTable.deletedAt)));
       deed = d ?? null;
     }
-    return { ...prop, deed };
+    const [withLabels] = await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC);
+    return { ...withLabels, deed };
   }
 
   @Patch(":propertyId")
@@ -253,7 +259,7 @@ class PropertiesController {
     const id = parseInt(propertyId, 10);
     const owner = scopeId(user);
     const updateData: Record<string, unknown> = {};
-    const fields = ["name", "type", "status", "city", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "usageType", "region", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
+    const fields = ["name", "status", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
     // Keep the lookup FKs in sync when the matching text field changes.
     if (body.type !== undefined) updateData.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", body.type);
@@ -287,7 +293,7 @@ class PropertiesController {
       .where(and(eq(propertiesTable.id, id), eq(propertiesTable.userId, owner), isNull(propertiesTable.deletedAt)))
       .returning();
     if (!prop) throw new NotFoundException("Property not found");
-    return prop;
+    return (await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC))[0];
   }
 
   @Delete(":propertyId")

@@ -17,7 +17,7 @@ export const ownersTable = pgTable("owners", {
   name: text("name").notNull(),
   type: ownerTypeEnum("type").notNull().default("individual"),
   idNumber: text("id_number"),
-  nationality: text("nationality"),
+  // nationality dropped (0024) — FK-only via nationalityLookupId.
   phone: text("phone"),
   email: text("email"),
   iban: text("iban"),

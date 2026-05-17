@@ -13,7 +13,7 @@ export const unitsTable = pgTable("units", {
   id: serial("id").primaryKey(),
   propertyId: integer("property_id").notNull().references(() => propertiesTable.id, { onDelete: "cascade" }),
   unitNumber: text("unit_number").notNull(),
-  type: text("type").notNull().default("apartment"),
+  // type / unitDirection / finishing dropped (0024) — FK-only via *_lookup_id.
   status: unitStatusEnum("status").notNull().default("available"),
   floor: integer("floor"),
   area: numeric("area", { precision: 10, scale: 2 }),
@@ -34,9 +34,7 @@ export const unitsTable = pgTable("units", {
   fiber: text("fiber"),
   amenities: text("amenities"),
   /* extra detail fields */
-  unitDirection: text("unit_direction"),
   yearBuilt: text("year_built"),
-  finishing: text("finishing"),
   facadeLength: numeric("facade_length", { precision: 10, scale: 2 }),
   unitLength: numeric("unit_length", { precision: 10, scale: 2 }),
   unitWidth: numeric("unit_width", { precision: 10, scale: 2 }),

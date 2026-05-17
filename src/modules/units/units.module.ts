@@ -11,14 +11,21 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { assertWithinQuota } from "../../common/quota";
-import { resolveLookupId } from "../../common/lookups-resolve";
+import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolve";
+
+/** Maps unit `*_lookup_id` FKs back to the text fields the clients expect. */
+const UNIT_LOOKUP_SPEC = [
+  { idField: "typeLookupId", out: "type", mode: "key" as const },
+  { idField: "directionLookupId", out: "unitDirection", mode: "key" as const },
+  { idField: "finishingLookupId", out: "finishing", mode: "key" as const },
+];
 
 const UNIT_FIELDS = [
-  "unitNumber", "type", "status", "floor", "area", "bedrooms", "bathrooms",
+  "unitNumber", "status", "floor", "area", "bedrooms", "bathrooms",
   "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
   "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing",
-  "kitchenType", "fiber", "amenities", "unitDirection", "yearBuilt",
-  "finishing", "facadeLength", "unitLength", "unitWidth", "unitHeight",
+  "kitchenType", "fiber", "amenities", "yearBuilt",
+  "facadeLength", "unitLength", "unitWidth", "unitHeight",
   "hasMezzanine", "notes",
   // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
   // The frontend's AddUnitPage was already sending these; the columns now
@@ -57,7 +64,7 @@ class UnitsController {
         propertyId: unitsTable.propertyId,
         propertyName: propertiesTable.name,
         unitNumber: unitsTable.unitNumber,
-        type: unitsTable.type,
+        typeLookupId: unitsTable.typeLookupId,
         status: unitsTable.status,
         floor: unitsTable.floor,
         area: unitsTable.area,
@@ -77,9 +84,9 @@ class UnitsController {
         kitchenType: unitsTable.kitchenType,
         fiber: unitsTable.fiber,
         amenities: unitsTable.amenities,
-        unitDirection: unitsTable.unitDirection,
+        directionLookupId: unitsTable.directionLookupId,
         yearBuilt: unitsTable.yearBuilt,
-        finishing: unitsTable.finishing,
+        finishingLookupId: unitsTable.finishingLookupId,
         facadeLength: unitsTable.facadeLength,
         unitLength: unitsTable.unitLength,
         unitWidth: unitsTable.unitWidth,
@@ -122,6 +129,7 @@ class UnitsController {
     // A unit with more than one active contract would be joined into multiple
     // rows — dedupe by id so each unit appears once.
     const deduped = Array.from(new Map(rows.map((r) => [r.id, r])).values());
+    await attachLookupLabels(this.db, deduped, UNIT_LOOKUP_SPEC);
     if (!usePaginated) return deduped;
     return { data: deduped, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -133,9 +141,10 @@ class UnitsController {
     const [prop] = await this.db.select().from(propertiesTable)
       .where(and(eq(propertiesTable.id, id), eq(propertiesTable.userId, scopeId(user)), isNull(propertiesTable.deletedAt)));
     if (!prop) throw new NotFoundException("Property not found");
-    return this.db.select().from(unitsTable)
+    const rows = await this.db.select().from(unitsTable)
       .where(and(eq(unitsTable.propertyId, id), isNull(unitsTable.deletedAt)))
       .orderBy(unitsTable.createdAt);
+    return attachLookupLabels(this.db, rows, UNIT_LOOKUP_SPEC);
   }
 
   @Post("properties/:propertyId/units")
@@ -158,17 +167,16 @@ class UnitsController {
     const values: Record<string, unknown> = { propertyId: id, isDemo: false };
     for (const f of UNIT_FIELDS) values[f] = body[f] ?? null;
     values.unitNumber = body.unitNumber;
-    values.type = body.type || "apartment";
     // status is NOT NULL — fall back to the schema default if the loop above
     // set it to null because body.status was undefined.
     if (values.status == null) values.status = "available";
-    // Keep the lookup FKs authoritative.
-    values.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", values.type);
+    // Unit type / direction / finishing are FK-only now.
+    values.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type || "apartment");
     values.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     values.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
 
     const [unit] = await this.db.insert(unitsTable).values(values as any).returning();
-    return unit;
+    return (await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
   }
 
   @Patch("units/:unitId")
@@ -188,7 +196,7 @@ class UnitsController {
     if (body.unitDirection !== undefined) updateData.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     if (body.finishing !== undefined) updateData.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
     const [unit] = await this.db.update(unitsTable).set(updateData).where(eq(unitsTable.id, id)).returning();
-    return unit;
+    return (await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
   }
 
   @Delete("units/:unitId")
