@@ -1,0 +1,37 @@
+import { pgTable, text, serial, timestamp, integer, numeric, date, index } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
+import { z } from "zod/v4";
+import { paymentsTable } from "./payments";
+import { usersTable } from "./users";
+
+/**
+ * Payment collections — a single collection event against a payment
+ * (installment). An installment can be collected in several steps: each
+ * partial (or full) amount handed over is one row here. The parent
+ * payment's status becomes `partially_paid` while collections sum to less
+ * than its amount, and `paid` once they cover it in full.
+ */
+export const paymentCollectionsTable = pgTable("payment_collections", {
+  id: serial("id").primaryKey(),
+  paymentId: integer("payment_id").notNull().references(() => paymentsTable.id, { onDelete: "cascade" }),
+  // Landlord that owns the payment — kept for tenant-scoped queries.
+  userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+  amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),
+  collectedDate: date("collected_date").notNull(),
+  // bank_transfer | cash | cheque | other
+  method: text("method"),
+  receiptNumber: text("receipt_number"),
+  // MinIO object key for the evidence document attached to this collection.
+  attachmentKey: text("attachment_key"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => ({
+  byPayment: index("payment_collections_payment_idx").on(t.paymentId),
+}));
+
+export const insertPaymentCollectionSchema = createInsertSchema(paymentCollectionsTable).omit({
+  id: true,
+  createdAt: true,
+});
+export type InsertPaymentCollection = z.infer<typeof insertPaymentCollectionSchema>;
+export type PaymentCollection = typeof paymentCollectionsTable.$inferSelect;

@@ -19,7 +19,8 @@ const CONTRACT_FIELDS = [
   "repName", "repIdNumber", "companyUnified", "companyOrgType",
   "signingDate", "signingPlace",
   "startDate", "endDate", "monthlyRent", "paymentFrequency", "depositAmount",
-  "vatEnabled", "escalationRate",
+  "depositStatus", "depositDueDate", "prepaidRent",
+  "vatEnabled", "escalationRate", "escalationType",
   "agencyFee", "firstPaymentAmount", "additionalFees",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
@@ -159,8 +160,12 @@ class ContractsController {
         monthlyRent: contractsTable.monthlyRent,
         paymentFrequency: contractsTable.paymentFrequency,
         depositAmount: contractsTable.depositAmount,
+        depositStatus: contractsTable.depositStatus,
+        depositDueDate: contractsTable.depositDueDate,
+        prepaidRent: contractsTable.prepaidRent,
         vatEnabled: contractsTable.vatEnabled,
         escalationRate: contractsTable.escalationRate,
+        escalationType: contractsTable.escalationType,
         agencyFee: contractsTable.agencyFee,
         firstPaymentAmount: contractsTable.firstPaymentAmount,
         additionalFees: contractsTable.additionalFees,
@@ -246,7 +251,11 @@ class ContractsController {
       monthlyRent: String(monthlyRent),
       paymentFrequency: freq,
       depositAmount: body.depositAmount ? String(body.depositAmount) : null,
+      depositStatus: body.depositStatus ?? null,
+      depositDueDate: body.depositDueDate ?? null,
+      prepaidRent: body.prepaidRent != null ? String(body.prepaidRent) : "0",
       vatEnabled: Boolean(body.vatEnabled ?? false),
+      escalationType: body.escalationType === "amount" ? "amount" : "percent",
       escalationRate: body.escalationRate != null ? String(body.escalationRate) : "0",
       agencyFee: body.agencyFee ? String(body.agencyFee) : null,
       firstPaymentAmount: body.firstPaymentAmount ? String(body.firstPaymentAmount) : null,
@@ -283,6 +292,7 @@ class ContractsController {
     const rows = buildInstallments(
       contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
       Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
+      body.escalationType === "amount" ? "amount" : "percent",
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
 
@@ -315,6 +325,7 @@ class ContractsController {
       contract.monthlyRent, freq,
       (contract.additionalFees as FeeEntry[] | null) ?? null,
       Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
+      (contract as any).escalationType || "percent",
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
     return { success: true, installmentsCreated: rows.length };

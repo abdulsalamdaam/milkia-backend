@@ -197,6 +197,27 @@
       "when": 1779139560000,
       "tag": "0027_fix_property_usage_labels",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1779139620000,
+      "tag": "0028_payment_collections",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1779139680000,
+      "tag": "0029_contract_escalation_type",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1779139740000,
+      "tag": "0030_contract_deposit_prepaid",
+      "breakpoints": true
     }
   ]
 }

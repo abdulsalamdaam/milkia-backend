@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 import { contractsTable } from "./contracts";
 import { usersTable } from "./users";
 
-export const paymentStatusEnum = pgEnum("payment_status", ["paid", "pending", "overdue", "cancelled"]);
+export const paymentStatusEnum = pgEnum("payment_status", ["paid", "pending", "overdue", "cancelled", "partially_paid"]);
 
 export const paymentsTable = pgTable("payments", {
   id: serial("id").primaryKey(),

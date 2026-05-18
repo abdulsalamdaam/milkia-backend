@@ -15,6 +15,7 @@ export function buildInstallments(
   additionalFees?: FeeEntry[] | null,
   vatEnabled = false,
   escalationRate = 0,
+  escalationType = "percent",
 ): InstallmentRow[] {
   const monthly = parseFloat(monthlyRent) || 0;
   const start = new Date(startDate);
@@ -26,14 +27,19 @@ export function buildInstallments(
   else if (paymentFrequency === "semi_annual") stepMonths = 6;
   else if (paymentFrequency === "annual" || paymentFrequency === "yearly") stepMonths = 12;
   const baseRent = monthly * stepMonths;
-  const escRate = (Number(escalationRate) || 0) / 100;
+  // 'percent' → compound a rate; 'amount' → add a fixed yearly SAR amount.
+  // The amount is an annual figure, pro-rated to the payment period.
+  const escRate = escalationType === "amount" ? 0 : (Number(escalationRate) || 0) / 100;
+  const escAmountPerPeriod = escalationType === "amount"
+    ? (Number(escalationRate) || 0) * (stepMonths / 12)
+    : 0;
 
   const cursor = new Date(start);
   while (cursor <= end) {
-    // Contract-year index → rent escalation compounds once per year.
+    // Contract-year index → rent escalation steps up once per year.
     const monthsSince = (cursor.getFullYear() - start.getFullYear()) * 12 + (cursor.getMonth() - start.getMonth());
     const year = Math.max(0, Math.floor(monthsSince / 12));
-    let amount = baseRent * Math.pow(1 + escRate, year);
+    let amount = baseRent * Math.pow(1 + escRate, year) + escAmountPerPeriod * year;
     if (vatEnabled) amount = amount * (1 + VAT_RATE);
     rows.push({
       contractId, userId,

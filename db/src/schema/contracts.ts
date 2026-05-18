@@ -30,13 +30,23 @@ export const contractsTable = pgTable("contracts", {
   // financial
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
-  monthlyRent: numeric("monthly_rent", { precision: 12, scale: 2 }).notNull(),
+  // Higher precision so annual = monthly * 12 is exact (1,000,000 / 12 →
+  // 83333.333333, which multiplies back to 1,000,000 — not 999,999.96).
+  monthlyRent: numeric("monthly_rent", { precision: 14, scale: 6 }).notNull(),
   paymentFrequency: paymentFrequencyEnum("payment_frequency").notNull().default("monthly"),
   depositAmount: numeric("deposit_amount", { precision: 12, scale: 2 }),
+  // Deposit (الوديعة) lifecycle — 'pending' | 'collected' | 'returned'.
+  depositStatus: text("deposit_status"),
+  depositDueDate: date("deposit_due_date"),
+  // Rent paid up-front; counted as already paid against the rent total.
+  prepaidRent: numeric("prepaid_rent", { precision: 14, scale: 2 }).notNull().default("0"),
   // VAT (15%) applied to each rent installment, and annual rent escalation
-  // (تصاعد الإيجار) — a percentage compounded once per contract year.
+  // (تصاعد الإيجار) compounded once per contract year.
   vatEnabled: boolean("vat_enabled").notNull().default(false),
-  escalationRate: numeric("escalation_rate", { precision: 5, scale: 2 }).notNull().default("0"),
+  // `escalationType` 'percent' → escalationRate is a % ; 'amount' → it is a
+  // fixed SAR amount added to the annual rent each year.
+  escalationType: text("escalation_type").notNull().default("percent"),
+  escalationRate: numeric("escalation_rate", { precision: 12, scale: 2 }).notNull().default("0"),
   // company representative (ممثل المستأجر للشركات)
   repName: text("rep_name"),
   repIdNumber: text("rep_id_number"),
