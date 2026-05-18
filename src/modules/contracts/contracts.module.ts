@@ -357,28 +357,40 @@ class ContractsController {
     return contract;
   }
 
+  /**
+   * End a contract. This does NOT delete it — the contract stays as a
+   * historical record with status `terminated`. Its units are unlinked
+   * and freed (status `available`), and its still-unpaid installments are
+   * dropped. Paid installments are kept as history.
+   */
   @Delete(":contractId")
   @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
   async remove(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string) {
     const id = parseInt(contractId, 10);
     const now = new Date();
     const [contract] = await this.db.update(contractsTable)
-      .set({ deletedAt: now } as any)
+      .set({ status: "terminated" })
       .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt)))
       .returning();
     if (!contract) throw new NotFoundException("Contract not found");
-    // Free every unit, and soft-delete the contract's payment installments.
-    // The contract_units links cascade-delete only on a hard delete, so a
-    // soft-deleted contract keeps them — fine, they are filtered out via
-    // the contract's own deletedAt.
+
+    // Free every unit the contract covered, then drop the contract↔unit
+    // linkage so the units are fully released.
     const unitIds = (await this.db.select({ unitId: contractUnitsTable.unitId })
       .from(contractUnitsTable).where(eq(contractUnitsTable.contractId, id))).map((r) => r.unitId);
     if (unitIds.length > 0) {
       await this.db.update(unitsTable).set({ status: "available" }).where(inArray(unitsTable.id, unitIds));
     }
+    await this.db.delete(contractUnitsTable).where(eq(contractUnitsTable.contractId, id));
+
+    // Drop only the unpaid installments — paid ones stay as history.
     await this.db.update(paymentsTable).set({ deletedAt: now } as any)
-      .where(and(eq(paymentsTable.contractId, id), isNull(paymentsTable.deletedAt)));
-    return { success: true, message: "تم الحذف بنجاح" };
+      .where(and(
+        eq(paymentsTable.contractId, id),
+        isNull(paymentsTable.deletedAt),
+        inArray(paymentsTable.status, ["pending", "overdue"] as any),
+      ));
+    return { success: true, message: "تم إنهاء العقد" };
   }
 }
 
