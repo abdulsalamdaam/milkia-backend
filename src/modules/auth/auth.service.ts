@@ -12,8 +12,9 @@ import { EmailService } from "../email/email.service";
 import { ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
 
 const MAX_FAILED = 5;
-/** Email-OTP code lifetime — short enough to be safe, long enough for the user to switch back to the app. */
-const EMAIL_OTP_TTL_MIN = 10;
+/** Email-OTP code lifetime — drives the DB expiry, the email text, and the
+ *  expiresInMinutes returned to the client (the login screen's timer). */
+const EMAIL_OTP_TTL_MIN = 2;
 const EMAIL_OTP_MAX_ATTEMPTS = 5;
 
 @Injectable()
