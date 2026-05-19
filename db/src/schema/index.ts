@@ -8,6 +8,7 @@ export * from "./properties";
 export * from "./units";
 export * from "./contracts";
 export * from "./contractUnits";
+export * from "./contractRentTerms";
 export * from "./payments";
 export * from "./paymentCollections";
 export * from "./paymentConfirmations";

@@ -1,7 +1,15 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, inArray } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, unitsTable, propertiesTable, paymentsTable } from "@oqudk/database";
+import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable } from "@oqudk/database";
+
+/** Parse + sanitise the per-year rent overrides sent by the client. */
+function parseRentTerms(raw: any): { year: number; amount: number }[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((t: any) => ({ year: parseInt(t?.year, 10), amount: Number(t?.amount) }))
+    .filter((t) => Number.isFinite(t.year) && t.year > 0 && Number.isFinite(t.amount) && t.amount > 0);
+}
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -40,6 +48,21 @@ class ContractsController {
    * its property's display fields — done as a separate query so a
    * multi-unit contract never multiplies the contract rows themselves.
    */
+  /** Per-year rent overrides grouped by contract id. */
+  private async rentTermsByContract(contractIds: number[]) {
+    const map = new Map<number, { year: number; amount: number }[]>();
+    if (contractIds.length === 0) return map;
+    const rows = await this.db.select().from(contractRentTermsTable)
+      .where(inArray(contractRentTermsTable.contractId, contractIds))
+      .orderBy(asc(contractRentTermsTable.year));
+    for (const r of rows) {
+      const list = map.get(r.contractId) ?? [];
+      list.push({ year: r.year, amount: Number(r.amount) });
+      map.set(r.contractId, list);
+    }
+    return map;
+  }
+
   private async unitsByContract(contractIds: number[]) {
     const map = new Map<number, any[]>();
     if (contractIds.length === 0) return map;
@@ -194,7 +217,12 @@ class ContractsController {
       rowsQ,
       usePaginated ? this.db.select({ total: count() }).from(contractsTable).where(where) : Promise.resolve([{ total: 0 }]),
     ]);
-    const data = this.withUnits(rows, await this.unitsByContract(rows.map((r) => r.id)));
+    const ids = rows.map((r) => r.id);
+    const [unitsMap, termsMap] = await Promise.all([
+      this.unitsByContract(ids),
+      this.rentTermsByContract(ids),
+    ]);
+    const data = this.withUnits(rows, unitsMap).map((c) => ({ ...c, rentTerms: termsMap.get(c.id) ?? [] }));
     if (!usePaginated) return data;
     return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -281,6 +309,14 @@ class ContractsController {
       unitIds.map((unitId) => ({ contractId: contract!.id, unitId })),
     );
 
+    // Per-year rent overrides (saved for drafts too, so they prefill on edit).
+    const rentTerms = parseRentTerms(body.rentTerms);
+    if (rentTerms.length > 0) {
+      await this.db.insert(contractRentTermsTable).values(
+        rentTerms.map((t) => ({ contractId: contract!.id, year: t.year, amount: String(t.amount) })),
+      );
+    }
+
     // A draft contract doesn't occupy its units and generates no
     // installments until it is finalised.
     if (isDraft) {
@@ -293,6 +329,7 @@ class ContractsController {
       contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
       Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
       body.escalationType === "amount" ? "amount" : "percent",
+      rentTerms, Number(body.prepaidRent) || 0,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
 
@@ -319,6 +356,9 @@ class ContractsController {
     );
 
     const freq = (body?.paymentFrequency as string) || contract.paymentFrequency || "monthly";
+    const termRows = await this.db.select().from(contractRentTermsTable)
+      .where(eq(contractRentTermsTable.contractId, id));
+    const rentTerms = termRows.map((t) => ({ year: t.year, amount: Number(t.amount) }));
     const rows = buildInstallments(
       contract.id, ownerId,
       contract.startDate, contract.endDate,
@@ -326,6 +366,7 @@ class ContractsController {
       (contract.additionalFees as FeeEntry[] | null) ?? null,
       Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
       (contract as any).escalationType || "percent",
+      rentTerms, Number((contract as any).prepaidRent) || 0,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
     return { success: true, installmentsCreated: rows.length };
@@ -343,6 +384,17 @@ class ContractsController {
       .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt)))
       .returning();
     if (!contract) throw new NotFoundException("Contract not found");
+
+    // Replace the per-year rent overrides when the client sends them.
+    if (body.rentTerms !== undefined) {
+      await this.db.delete(contractRentTermsTable).where(eq(contractRentTermsTable.contractId, id));
+      const terms = parseRentTerms(body.rentTerms);
+      if (terms.length > 0) {
+        await this.db.insert(contractRentTermsTable).values(
+          terms.map((t) => ({ contractId: id, year: t.year, amount: String(t.amount) })),
+        );
+      }
+    }
 
     // A status change cascades to every unit the contract covers.
     const newStatus = body.status as string | undefined;

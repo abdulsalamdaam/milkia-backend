@@ -218,6 +218,13 @@
       "when": 1779139740000,
       "tag": "0030_contract_deposit_prepaid",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1779139800000,
+      "tag": "0031_contract_rent_terms",
+      "breakpoints": true
     }
   ]
 }

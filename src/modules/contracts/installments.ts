@@ -1,4 +1,6 @@
 export type FeeEntry = { id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string };
+/** Per-year rent override — `year` is 1-based (year 1, 2, 3, …). */
+export type RentTerm = { year: number; amount: number };
 export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending"; description: string | null; isDemo: boolean };
 
 export const VAT_RATE = 0.15;
@@ -16,6 +18,8 @@ export function buildInstallments(
   vatEnabled = false,
   escalationRate = 0,
   escalationType = "percent",
+  rentTerms?: RentTerm[] | null,
+  prepaidRent = 0,
 ): InstallmentRow[] {
   const monthly = parseFloat(monthlyRent) || 0;
   const start = new Date(startDate);
@@ -26,20 +30,31 @@ export function buildInstallments(
   if (paymentFrequency === "quarterly") stepMonths = 3;
   else if (paymentFrequency === "semi_annual") stepMonths = 6;
   else if (paymentFrequency === "annual" || paymentFrequency === "yearly") stepMonths = 12;
-  const baseRent = monthly * stepMonths;
+  // Base annual rent; the per-period figure is a fraction of it.
+  const baseAnnual = monthly * 12;
+  const periodFrac = stepMonths / 12;
   // 'percent' → compound a rate; 'amount' → add a fixed yearly SAR amount.
-  // The amount is an annual figure, pro-rated to the payment period.
   const escRate = escalationType === "amount" ? 0 : (Number(escalationRate) || 0) / 100;
-  const escAmountPerPeriod = escalationType === "amount"
-    ? (Number(escalationRate) || 0) * (stepMonths / 12)
-    : 0;
+  const escAmountAnnual = escalationType === "amount" ? (Number(escalationRate) || 0) : 0;
+  // Per-year overrides — keyed by 1-based contract year.
+  const termMap = new Map<number, number>();
+  for (const t of rentTerms || []) {
+    const y = Number(t.year), a = Number(t.amount);
+    if (Number.isFinite(y) && y > 0 && Number.isFinite(a) && a > 0) termMap.set(y, a);
+  }
 
+  // Rent rows first (so prepaid can be applied to the earliest ones).
+  const rentStart = rows.length;
   const cursor = new Date(start);
   while (cursor <= end) {
-    // Contract-year index → rent escalation steps up once per year.
+    // Contract-year index (0-based) → escalation / per-year overrides.
     const monthsSince = (cursor.getFullYear() - start.getFullYear()) * 12 + (cursor.getMonth() - start.getMonth());
     const year = Math.max(0, Math.floor(monthsSince / 12));
-    let amount = baseRent * Math.pow(1 + escRate, year) + escAmountPerPeriod * year;
+    // An explicit per-year rate wins; otherwise the escalated base rent.
+    const annualForYear = termMap.has(year + 1)
+      ? termMap.get(year + 1)!
+      : baseAnnual * Math.pow(1 + escRate, year) + escAmountAnnual * year;
+    let amount = annualForYear * periodFrac;
     if (vatEnabled) amount = amount * (1 + VAT_RATE);
     rows.push({
       contractId, userId,
@@ -50,6 +65,15 @@ export function buildInstallments(
       isDemo: false,
     });
     cursor.setMonth(cursor.getMonth() + stepMonths);
+  }
+
+  // Prepaid rent is deducted from the earliest rent installment(s).
+  let leftover = round2(Number(prepaidRent) || 0);
+  for (let i = rentStart; i < rows.length && leftover > 0; i++) {
+    const amt = Number(rows[i]!.amount);
+    const ded = Math.min(leftover, amt);
+    rows[i]!.amount = round2(amt - ded).toFixed(2);
+    leftover = round2(leftover - ded);
   }
 
   if (additionalFees && additionalFees.length > 0) {
