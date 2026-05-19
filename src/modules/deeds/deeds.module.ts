@@ -26,7 +26,8 @@ import { scopeId } from "../../common/scope";
 
 const deedCreateSchema = z.object({
   deedNumber: z.string().trim().min(1, "رقم الصك مطلوب · Deed number is required"),
-  deedType: z.enum(["electronic", "paper"]).default("electronic"),
+  // "electronic" | "paper" | any custom ("Other") value the user types.
+  deedType: z.string().trim().min(1).default("electronic"),
   // documentUrl holds either a full URL or — most often — the MinIO object
   // key returned by FileUpload (e.g. "deeds/123/abc.pdf"). Both are valid
   // payloads. We don't enforce .url() here because object keys aren't URLs.

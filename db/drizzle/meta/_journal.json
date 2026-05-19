@@ -225,6 +225,13 @@
       "when": 1779139800000,
       "tag": "0031_contract_rent_terms",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1779139860000,
+      "tag": "0032_deed_type_to_text",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -13,14 +13,13 @@ import { ownersTable } from "./owners";
  * is enforced 1:1 via a unique index on properties.deedId (see properties.ts),
  * so a single deed cannot be re-linked to a second property.
  */
-export const deedTypeEnum = pgEnum("deed_type", ["electronic", "paper"]);
-
 export const deedsTable = pgTable("deeds", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
 
   deedNumber: text("deed_number").notNull(),
-  deedType: deedTypeEnum("deed_type").notNull().default("electronic"),
+  // Plain text — "electronic" | "paper" | any custom ("Other") value.
+  deedType: text("deed_type").notNull().default("electronic"),
 
   // The attached document — single file. Filename kept separately so the UI
   // can show the original name even when the URL is a content-hash path.
