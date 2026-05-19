@@ -35,7 +35,13 @@ class PaymentsController {
       typeof rawQuery?.statusIn === "string"
         ? rawQuery.statusIn.split(",").map((s: string) => s.trim()).filter((s: string) => PAYMENT_STATUSES.includes(s))
         : undefined;
-    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null || status != null || statusIn != null);
+    // `contractIds` — comma-separated contract ids; the Installments tab's
+    // property / tenant / landlord filters resolve to a set of contracts.
+    const contractIds: number[] | undefined =
+      typeof rawQuery?.contractIds === "string" && rawQuery.contractIds.trim()
+        ? rawQuery.contractIds.split(",").map((s: string) => parseInt(s, 10)).filter((n: number) => Number.isFinite(n))
+        : undefined;
+    const usePaginated = rawQuery && (rawQuery.page != null || rawQuery.pageSize != null || rawQuery.search != null || status != null || statusIn != null || contractIds != null);
     const q = listQuerySchema.parse(rawQuery ?? {});
     const baseWhere = and(eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt));
     const conds = [baseWhere];
@@ -48,6 +54,7 @@ class PaymentsController {
     }
     if (status) conds.push(eq(paymentsTable.status, status as any));
     else if (statusIn && statusIn.length > 0) conds.push(inArray(paymentsTable.status, statusIn as any));
+    if (contractIds && contractIds.length > 0) conds.push(inArray(paymentsTable.contractId, contractIds));
     const where = and(...conds);
 
     let rowsQ = this.db
