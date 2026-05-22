@@ -10,6 +10,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { seedDemoData } from "./demo-seed";
 import { ALL_PERMISSIONS, ROLE_PRESETS } from "../../common/permissions";
 import { EmailService } from "../email/email.service";
+import { isPackagePlan } from "../../common/packages";
 
 @ApiTags("admin")
 @ApiBearerAuth("user-jwt")
@@ -395,13 +396,12 @@ class AdminController {
   @Patch("registrations/:id/approve")
   async approve(@Param("id") id: string, @Body() body: { packagePlan?: string } | undefined) {
     const uid = parseInt(id, 10);
-    const plan = body?.packagePlan === "individual_owner" ? "individual_owner" : "broker";
+    const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan : "basic";
     const [user] = await this.db.update(usersTable)
       .set({ accountStatus: "active", isActive: true, packagePlan: plan })
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
-    if (plan === "individual_owner") await this.ensureSoleLandlord(user);
     // Fire-and-forget the approval notice — must not block the API response.
     void this.email.sendRegistrationApproved(user.email, user.name);
     return { success: true, id: user.id, accountStatus: user.accountStatus, packagePlan: plan };
@@ -411,13 +411,12 @@ class AdminController {
   @Patch("users/:userId/package")
   async changePackage(@Param("userId") userId: string, @Body() body: { packagePlan?: string }) {
     const id = parseInt(userId, 10);
-    const plan = body?.packagePlan === "individual_owner" ? "individual_owner" : "broker";
+    const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan : "basic";
     const [user] = await this.db.update(usersTable)
       .set({ packagePlan: plan })
       .where(eq(usersTable.id, id))
       .returning();
     if (!user) throw new NotFoundException("User not found");
-    if (plan === "individual_owner") await this.ensureSoleLandlord(user);
     return { success: true, id: user.id, packagePlan: plan };
   }
 
