@@ -22,6 +22,7 @@ import { buildInstallments, type FeeEntry } from "./installments";
 import { attachLookupLabels } from "../../common/lookups-resolve";
 
 const CONTRACT_FIELDS = [
+  "tenantId",
   "tenantType", "tenantName", "tenantIdNumber", "tenantPhone", "tenantNationality", "tenantEmail",
   "tenantTaxNumber", "tenantAddress", "tenantPostalCode", "tenantAdditionalNumber", "tenantBuildingNumber",
   "repName", "repIdNumber", "companyUnified", "companyOrgType",
@@ -161,6 +162,7 @@ class ContractsController {
       .select({
         id: contractsTable.id,
         contractNumber: contractsTable.contractNumber,
+        tenantId: contractsTable.tenantId,
         tenantType: contractsTable.tenantType,
         tenantName: contractsTable.tenantName,
         tenantIdNumber: contractsTable.tenantIdNumber,
@@ -257,6 +259,7 @@ class ContractsController {
     const [contract] = await this.db.insert(contractsTable).values({
       userId: ownerId,
       contractNumber,
+      tenantId: body.tenantId != null ? Number(body.tenantId) : null,
       tenantType: body.tenantType ?? null,
       tenantName,
       tenantIdNumber: body.tenantIdNumber ?? null,
@@ -378,6 +381,8 @@ class ContractsController {
     const id = parseInt(contractId, 10);
     const updateData: Record<string, unknown> = {};
     for (const f of CONTRACT_FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
+    // tenant_id is an integer FK — coerce the incoming value (or clear it).
+    if (body.tenantId !== undefined) updateData.tenantId = body.tenantId != null ? Number(body.tenantId) : null;
 
     const [contract] = await this.db.update(contractsTable)
       .set(updateData)

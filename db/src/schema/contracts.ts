@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, integer, numeric, boolean, date, pgEn
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
+import { tenantsTable } from "./tenants";
 
 export const contractStatusEnum = pgEnum("contract_status", ["active", "expired", "terminated", "pending"]);
 export const paymentFrequencyEnum = pgEnum("payment_frequency", ["monthly", "quarterly", "semi_annual", "annual"]);
@@ -12,7 +13,10 @@ export const contractsTable = pgTable("contracts", {
   // A contract's units live in the `contract_units` join table — a contract
   // can span many units. Rent below is one combined figure for all of them.
   contractNumber: text("contract_number").notNull().unique(),
-  // tenant
+  // tenant — FK link to the registered tenant (one tenant → many contracts).
+  // The tenant* text fields below are kept as a denormalised snapshot of the
+  // renter's details at signing time.
+  tenantId: integer("tenant_id").references(() => tenantsTable.id, { onDelete: "set null" }),
   tenantType: text("tenant_type"),
   tenantName: text("tenant_name").notNull(),
   tenantIdNumber: text("tenant_id_number"),
