@@ -189,9 +189,18 @@ class PropertiesController {
       if (clash) throw new ConflictException("الصك مرتبط بعقار آخر · This deed is already linked to another property");
     }
 
-    // Resolve the landlord. Individual-owner accounts have a single sole
-    // landlord (themselves) — auto-link it when the form sends none.
+    // Resolve the landlord when the form sends none:
+    //   1. Use the account's flagged default landlord, if any.
+    //   2. Otherwise, individual-owner accounts auto-link their sole landlord.
     let ownerId: number | null = body.ownerId != null ? Number(body.ownerId) : null;
+    if (ownerId == null) {
+      const [def] = await this.db.select({ id: ownersTable.id })
+        .from(ownersTable)
+        .where(and(eq(ownersTable.userId, owner), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt)))
+        .orderBy(asc(ownersTable.id))
+        .limit(1);
+      ownerId = def?.id ?? null;
+    }
     if (ownerId == null) {
       const [u] = await this.db.select({ packagePlan: usersTable.packagePlan })
         .from(usersTable).where(eq(usersTable.id, owner));

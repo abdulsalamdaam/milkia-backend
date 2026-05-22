@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
+import { and, eq, ne, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
 import { ownersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -26,6 +26,8 @@ const FIELDS = [
   // column is still updatable above for backwards compat.
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
   "isDraft",
+  // Default landlord — newly-created properties auto-link to this one.
+  "isDefault",
   // Lookups-FK refactor — nationality is now FK-only.
   "nationalityLookupId",
 ] as const;
@@ -75,6 +77,13 @@ class OwnersController {
     if (!body.name) throw new BadRequestException("الاسم مطلوب");
     // Enforce the subscription package's landlord quota.
     await assertWithinQuota(this.db, scopeId(user), "landlords");
+    const wantsDefault = Boolean(body.isDefault ?? false);
+    // Only one default landlord per account: clear any existing flag before
+    // inserting the new default so the partial unique index never clashes.
+    if (wantsDefault) {
+      await this.db.update(ownersTable).set({ isDefault: false })
+        .where(and(eq(ownersTable.userId, scopeId(user)), eq(ownersTable.isDefault, true)));
+    }
     const [owner] = await this.db.insert(ownersTable).values({
       userId: scopeId(user),
       name: body.name,
@@ -103,6 +112,7 @@ class OwnersController {
       nationalAddressDistrict: body.nationalAddressDistrict ?? null,
       nationalAddressStreet: body.nationalAddressStreet ?? null,
       isDraft: Boolean(body.isDraft ?? false),
+      isDefault: wantsDefault,
       isDemo: "false",
     }).returning();
     return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
@@ -115,6 +125,12 @@ class OwnersController {
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
     if (body.nationality !== undefined) updateData.nationalityLookupId = body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality);
+    // Promoting this landlord to default? Clear the flag on every other row
+    // first (single default per account) so the target update can't clash.
+    if (body.isDefault === true) {
+      await this.db.update(ownersTable).set({ isDefault: false })
+        .where(and(eq(ownersTable.userId, scopeId(user)), eq(ownersTable.isDefault, true), ne(ownersTable.id, id)));
+    }
     const [owner] = await this.db.update(ownersTable).set(updateData)
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)))
       .returning();

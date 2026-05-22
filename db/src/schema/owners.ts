@@ -48,6 +48,10 @@ export const ownersTable = pgTable("owners", {
   isDemo: text("is_demo").default("false"),
   // Draft records are saved incomplete and finished later.
   isDraft: boolean("is_draft").notNull().default(false),
+  // When true, newly-created properties auto-link to this landlord. At most
+  // one default per account — setting a new one clears the previous (enforced
+  // in the owners module + a partial unique index).
+  isDefault: boolean("is_default").notNull().default(false),
   // Lookups-FK refactor (phase 3) — backfilled from the `nationality` text.
   nationalityLookupId: integer("nationality_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),

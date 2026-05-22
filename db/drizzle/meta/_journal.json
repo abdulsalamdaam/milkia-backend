@@ -253,6 +253,13 @@
       "when": 1779140040000,
       "tag": "0035_contract_tenant_id",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1779140100000,
+      "tag": "0036_owner_is_default",
+      "breakpoints": true
     }
   ]
 }
