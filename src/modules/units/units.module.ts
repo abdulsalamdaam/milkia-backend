@@ -20,6 +20,14 @@ const UNIT_LOOKUP_SPEC = [
   { idField: "finishingLookupId", out: "finishing", mode: "key" as const },
 ];
 
+/** Surface the free-text "Other" type when the row has no lookup FK. Mutates in place. */
+function overlayUnitTypeOther<T extends { type?: unknown; typeOther?: unknown }>(rows: T[]): T[] {
+  for (const r of rows) {
+    if ((r.type == null || r.type === "") && r.typeOther) (r as { type?: unknown }).type = r.typeOther;
+  }
+  return rows;
+}
+
 const UNIT_FIELDS = [
   "unitNumber", "status", "floor", "area", "bedrooms", "bathrooms",
   "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
@@ -65,6 +73,7 @@ class UnitsController {
         propertyName: propertiesTable.name,
         unitNumber: unitsTable.unitNumber,
         typeLookupId: unitsTable.typeLookupId,
+        typeOther: unitsTable.typeOther,
         status: unitsTable.status,
         floor: unitsTable.floor,
         area: unitsTable.area,
@@ -130,6 +139,7 @@ class UnitsController {
     // rows — dedupe by id so each unit appears once.
     const deduped = Array.from(new Map(rows.map((r) => [r.id, r])).values());
     await attachLookupLabels(this.db, deduped, UNIT_LOOKUP_SPEC);
+    overlayUnitTypeOther(deduped);
     if (!usePaginated) return deduped;
     return { data: deduped, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -144,7 +154,7 @@ class UnitsController {
     const rows = await this.db.select().from(unitsTable)
       .where(and(eq(unitsTable.propertyId, id), isNull(unitsTable.deletedAt)))
       .orderBy(unitsTable.createdAt);
-    return attachLookupLabels(this.db, rows, UNIT_LOOKUP_SPEC);
+    return overlayUnitTypeOther(await attachLookupLabels(this.db, rows, UNIT_LOOKUP_SPEC));
   }
 
   @Post("properties/:propertyId/units")
@@ -171,12 +181,15 @@ class UnitsController {
     // set it to null because body.status was undefined.
     if (values.status == null) values.status = "available";
     // Unit type / direction / finishing are FK-only now.
-    values.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type || "apartment");
+    const unitTypeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type || "apartment");
+    values.typeLookupId = unitTypeLookupId;
+    // A custom "Other" type that matches no lookup stays as raw text on the row.
+    values.typeOther = unitTypeLookupId == null && body.type ? String(body.type).trim() || null : null;
     values.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     values.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
 
     const [unit] = await this.db.insert(unitsTable).values(values as any).returning();
-    return (await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
+    return overlayUnitTypeOther(await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
   }
 
   @Patch("units/:unitId")
@@ -192,11 +205,16 @@ class UnitsController {
     if (!unit0) throw new NotFoundException("Unit not found");
     const updateData: Record<string, unknown> = {};
     for (const f of UNIT_FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
-    if (body.type !== undefined) updateData.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type);
+    if (body.type !== undefined) {
+      const unitTypeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "unit_type", body.type);
+      updateData.typeLookupId = unitTypeLookupId;
+      // Free-text "Other" type lives on the row, not in the shared lookups.
+      updateData.typeOther = unitTypeLookupId == null && body.type ? String(body.type).trim() || null : null;
+    }
     if (body.unitDirection !== undefined) updateData.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     if (body.finishing !== undefined) updateData.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
     const [unit] = await this.db.update(unitsTable).set(updateData).where(eq(unitsTable.id, id)).returning();
-    return (await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
+    return overlayUnitTypeOther(await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];
   }
 
   @Delete("units/:unitId")

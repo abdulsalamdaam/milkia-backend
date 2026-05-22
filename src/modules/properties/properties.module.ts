@@ -23,6 +23,14 @@ const PROPERTY_LOOKUP_SPEC = [
   { idField: "cityLookupId", out: "city", mode: "labelAr" as const },
 ];
 
+/** Surface the free-text "Other" type when the row has no lookup FK. Mutates in place. */
+function overlayTypeOther<T extends { type?: unknown; typeOther?: unknown }>(rows: T[]): T[] {
+  for (const r of rows) {
+    if ((r.type == null || r.type === "") && r.typeOther) (r as { type?: unknown }).type = r.typeOther;
+  }
+  return rows;
+}
+
 /** When the caller is an employee, list their owner's data. Top-level users see their own. */
 function scopeId(user: AuthUser): number {
   return user.ownerUserId ?? user.id;
@@ -108,6 +116,7 @@ class PropertiesController {
     });
 
     await attachLookupLabels(this.db, data, PROPERTY_LOOKUP_SPEC);
+    overlayTypeOther(data);
     if (!usePaginated) return data; // legacy shape
     return { data, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -196,6 +205,12 @@ class PropertiesController {
       }
     }
 
+    // Resolve the property type to a lookup FK; if it matches no option, keep
+    // the raw text on the row (typeOther) instead of polluting the shared
+    // lookups table.
+    const typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", type);
+    const typeOther = typeLookupId == null && type ? String(type).trim() || null : null;
+
     const [prop] = await this.db.insert(propertiesTable).values({
       userId: owner,
       ownerId,
@@ -210,7 +225,8 @@ class PropertiesController {
       parkings: body.parkings ? parseInt(body.parkings) : null,
       yearBuilt: body.yearBuilt ? parseInt(body.yearBuilt) : null,
       buildingType: body.buildingType ?? null,
-      typeLookupId: body.typeLookupId ?? await resolveLookupId(this.db, "property_type", type),
+      typeLookupId,
+      typeOther,
       usageLookupId: body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType),
       regionLookupId: body.regionLookupId ?? await resolveLookupId(this.db, "region", body.region),
       cityLookupId: body.cityLookupId ?? await resolveLookupId(this.db, "city", city),
@@ -225,7 +241,7 @@ class PropertiesController {
       isDemo: false,
     }).returning();
 
-    const [withLabels] = await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC);
+    const [withLabels] = overlayTypeOther(await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC));
     return { ...withLabels, occupancyRate: 0, rentedUnits: 0 };
   }
 
@@ -249,7 +265,7 @@ class PropertiesController {
         .where(and(eq(deedsTable.id, prop.deedId), isNull(deedsTable.deletedAt)));
       deed = d ?? null;
     }
-    const [withLabels] = await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC);
+    const [withLabels] = overlayTypeOther(await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC));
     return { ...withLabels, deed };
   }
 
@@ -262,7 +278,12 @@ class PropertiesController {
     const fields = ["name", "status", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
     // Keep the lookup FKs in sync when the matching text field changes.
-    if (body.type !== undefined) updateData.typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", body.type);
+    if (body.type !== undefined) {
+      const typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", body.type);
+      updateData.typeLookupId = typeLookupId;
+      // Free-text "Other" type lives on the row, not in the shared lookups.
+      updateData.typeOther = typeLookupId == null && body.type ? String(body.type).trim() || null : null;
+    }
     if (body.usageType !== undefined) updateData.usageLookupId = body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType);
     if (body.region !== undefined) updateData.regionLookupId = body.regionLookupId ?? await resolveLookupId(this.db, "region", body.region);
     if (body.city !== undefined) updateData.cityLookupId = body.cityLookupId ?? await resolveLookupId(this.db, "city", body.city);
@@ -293,7 +314,7 @@ class PropertiesController {
       .where(and(eq(propertiesTable.id, id), eq(propertiesTable.userId, owner), isNull(propertiesTable.deletedAt)))
       .returning();
     if (!prop) throw new NotFoundException("Property not found");
-    return (await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC))[0];
+    return overlayTypeOther(await attachLookupLabels(this.db, [{ ...prop }], PROPERTY_LOOKUP_SPEC))[0];
   }
 
   @Delete(":propertyId")

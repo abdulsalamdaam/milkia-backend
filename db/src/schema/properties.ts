@@ -47,6 +47,10 @@ export const propertiesTable = pgTable("properties", {
   // Lookups-FK refactor (phase 3) — populated from the text columns
   // above; the text columns remain the source of truth until phase 6.
   typeLookupId: integer("type_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  // Free-text "Other" property type — stored on the row itself (NOT added to
+  // the shared lookups table, so it never appears for other users). Used only
+  // when the chosen type doesn't match an existing lookup option.
+  typeOther: text("type_other"),
   usageLookupId: integer("usage_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   regionLookupId: integer("region_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   cityLookupId: integer("city_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),

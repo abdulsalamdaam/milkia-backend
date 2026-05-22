@@ -232,6 +232,20 @@
       "when": 1779139860000,
       "tag": "0032_deed_type_to_text",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1779139920000,
+      "tag": "0033_property_type_other",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1779139980000,
+      "tag": "0034_unit_type_other",
+      "breakpoints": true
     }
   ]
 }

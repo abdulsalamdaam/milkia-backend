@@ -55,6 +55,10 @@ export const unitsTable = pgTable("units", {
   notes: text("notes"),
   // Lookups-FK refactor (phase 3) — backfilled from the text columns.
   typeLookupId: integer("type_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  // Free-text "Other" unit type — stored on the row itself (NOT added to the
+  // shared lookups table, so it never appears for other users). Used only when
+  // the chosen type matches no existing lookup option.
+  typeOther: text("type_other"),
   directionLookupId: integer("direction_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   finishingLookupId: integer("finishing_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
