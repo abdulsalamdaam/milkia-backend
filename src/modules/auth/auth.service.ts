@@ -2,7 +2,7 @@ import { Injectable, Inject, BadRequestException, NotFoundException, Unauthorize
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
 import { companiesTable, emailOtpTokensTable, loginLogsTable, rolesTable, tenantsTable, usersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
@@ -16,6 +16,8 @@ const MAX_FAILED = 5;
  *  expiresInMinutes returned to the client (the login screen's timer). */
 const EMAIL_OTP_TTL_MIN = 2;
 const EMAIL_OTP_MAX_ATTEMPTS = 5;
+/** Minimum gap before another login OTP can be requested (per IP / email). */
+const OTP_RESEND_COOLDOWN_MIN = 2;
 
 @Injectable()
 export class AuthService {
@@ -184,6 +186,33 @@ export class AuthService {
       }
     }
     if (!user.isActive) throw new UnauthorizedException("الحساب غير مفعّل. تواصل مع الدعم");
+
+    // OTP send cooldown — block requesting another code within
+    // EMAIL_OTP_TTL_MIN minutes from the same IP (or the same email). This
+    // closes the OTP-flooding gap and is enforced in the DB so it can't be
+    // bypassed by an in-memory throttler reset / restart.
+    const cooldownMs = OTP_RESEND_COOLDOWN_MIN * 60_000;
+    const since = new Date(Date.now() - cooldownMs);
+    const senderMatch = ctx.ip
+      ? or(eq(emailOtpTokensTable.email, email), eq(emailOtpTokensTable.ip, ctx.ip))
+      : eq(emailOtpTokensTable.email, email);
+    const [recent] = await this.db
+      .select({ createdAt: emailOtpTokensTable.createdAt })
+      .from(emailOtpTokensTable)
+      .where(and(gt(emailOtpTokensTable.createdAt, since), senderMatch))
+      .orderBy(desc(emailOtpTokensTable.createdAt))
+      .limit(1);
+    if (recent) {
+      const waitSec = Math.max(1, Math.ceil((recent.createdAt.getTime() + cooldownMs - Date.now()) / 1000));
+      throw new HttpException(
+        {
+          error: `الرجاء الانتظار ${waitSec} ثانية قبل طلب رمز جديد · Please wait ${waitSec}s before requesting another code.`,
+          code: "OTP_COOLDOWN",
+          retryAfter: waitSec,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
 
     const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
     const codeHash = await bcrypt.hash(code, 8);
