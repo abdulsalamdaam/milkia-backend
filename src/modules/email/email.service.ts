@@ -8,6 +8,13 @@ import { Injectable, Logger } from "@nestjs/common";
  */
 const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://oqudk.com/logo.png";
 
+/**
+ * Tenant mobile-app download links. Default to the marketing site until the
+ * store listings go live; override per-store via env when published.
+ */
+const APP_IOS_URL = process.env.APP_IOS_URL || "https://oqudk.com";
+const APP_ANDROID_URL = process.env.APP_ANDROID_URL || "https://oqudk.com";
+
 export interface SendEmailInput {
   to: string | string[];
   subject: string;
@@ -141,6 +148,60 @@ export class EmailService {
       subject: `رمز الدخول · Oqudk login code: ${code}`,
       html,
       text: `Your Oqudk login code: ${code}\nValid for ${ttlMinutes} minutes.`,
+    });
+  }
+
+  /**
+   * Welcome email for a freshly-added tenant: a friendly greeting plus a
+   * nudge to download the mobile app. Sent only when the landlord opts in
+   * (the "send welcome" checkbox) and the tenant has an email on file.
+   */
+  async sendTenantWelcome(to: string, name: string): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">مرحباً ${safeName} 👋</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        يسعدنا انضمامك إلى <strong>عقودك</strong>. لمتابعة عقد إيجارك ومدفوعاتك وتقديم طلبات الصيانة بسهولة، حمّل تطبيق عقودك على جوالك.
+      </p>
+      <p style="margin:0 0 4px;color:#334155;line-height:1.7;">
+        Welcome aboard! Download the Oqudk app to follow your lease, payments and maintenance requests on the go.
+      </p>
+      ${appButtons()}
+      <p style="margin:16px 0 0;color:#64748b;font-size:13px;">
+        إذا واجهت أي مشكلة لا تتردد في التواصل معنا على hello@oqudk.com.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: "أهلاً بك في عقودك · Welcome to Oqudk",
+      html,
+      text: `مرحباً ${name}، يسعدنا انضمامك إلى عقودك. حمّل التطبيق: iOS ${APP_IOS_URL} | Android ${APP_ANDROID_URL}`,
+    });
+  }
+
+  /**
+   * Reminder nudging a tenant to download the app (e.g. when the landlord
+   * sees they still haven't installed it). No-op when `to` is empty.
+   */
+  async sendAppDownloadReminder(to: string, name: string): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">حمّل تطبيق عقودك 📱</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        مرحباً ${safeName}، هذا تذكير ودّي بتحميل تطبيق <strong>عقودك</strong>. عبر التطبيق يمكنك متابعة عقدك ومدفوعاتك وتقديم طلبات الصيانة في أي وقت.
+      </p>
+      <p style="margin:0 0 4px;color:#334155;line-height:1.7;">
+        Hi ${safeName}, a friendly reminder to download the Oqudk app to manage your lease, payments and maintenance requests anytime.
+      </p>
+      ${appButtons()}
+    `);
+    return this.send({
+      to,
+      subject: "تذكير بتحميل تطبيق عقودك · Get the Oqudk app",
+      html,
+      text: `${name}، حمّل تطبيق عقودك: iOS ${APP_IOS_URL} | Android ${APP_ANDROID_URL}`,
     });
   }
 
@@ -391,6 +452,14 @@ function escapeHtml(value: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+/** Two app-store call-to-action buttons used in tenant-facing emails. */
+function appButtons(): string {
+  return `<div style="margin:24px 0;text-align:center;">
+    <a href="${APP_IOS_URL}" style="display:inline-block;margin:4px 6px;background:#0f172a;color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:10px;font-size:14px;">App Store · آب ستور</a>
+    <a href="${APP_ANDROID_URL}" style="display:inline-block;margin:4px 6px;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:10px;font-size:14px;">Google Play · جوجل بلاي</a>
+  </div>`;
 }
 
 function row(label: string, value: string): string {

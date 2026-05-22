@@ -10,6 +10,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
+import { EmailService } from "../email/email.service";
 
 const FIELDS = [
   "name", "type", "status", "nationalId", "phone", "email", "taxNumber",
@@ -28,7 +29,10 @@ const FIELDS = [
 @Controller("tenants")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class TenantsController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   @Get()
   @RequirePermissions(PERMISSIONS.TENANTS_VIEW)
@@ -96,7 +100,25 @@ class TenantsController {
       isDraft: Boolean(body.isDraft ?? false),
       isDemo: "false",
     }).returning();
+    // Optional welcome email (opt-in via the add-tenant checkbox). Best-effort
+    // and fire-and-forget so it never blocks or fails tenant creation.
+    if (body.sendWelcomeEmail && tenant?.email) {
+      void this.email.sendTenantWelcome(tenant.email, tenant.name);
+    }
     return tenant;
+  }
+
+  /** Email the tenant a nudge to download the mobile app. */
+  @Post(":id/app-reminder")
+  @RequirePermissions(PERMISSIONS.TENANTS_WRITE)
+  async appReminder(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const tid = parseInt(id, 10);
+    const [tenant] = await this.db.select().from(tenantsTable)
+      .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, scopeId(user)), isNull(tenantsTable.deletedAt)));
+    if (!tenant) throw new NotFoundException("غير موجود");
+    if (!tenant.email) throw new BadRequestException("لا يوجد بريد إلكتروني لهذا المستأجر · This tenant has no email on file");
+    const sent = await this.email.sendAppDownloadReminder(tenant.email, tenant.name);
+    return { sent };
   }
 
   @Patch(":id")
