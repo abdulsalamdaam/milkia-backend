@@ -418,7 +418,7 @@ class ContractsController {
    * End a contract. This does NOT delete it — the contract stays as a
    * historical record with status `terminated`. Its units are unlinked
    * and freed (status `available`), and its still-unpaid installments are
-   * dropped. Paid installments are kept as history.
+   * marked collected (paid). Already-paid installments are kept as-is.
    */
   @Delete(":contractId")
   @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
@@ -440,12 +440,14 @@ class ContractsController {
     }
     await this.db.delete(contractUnitsTable).where(eq(contractUnitsTable.contractId, id));
 
-    // Drop only the unpaid installments — paid ones stay as history.
-    await this.db.update(paymentsTable).set({ deletedAt: now } as any)
+    // Settle the contract's still-unpaid installments — mark them collected
+    // (paid) so they stay as paid history rather than being dropped.
+    await this.db.update(paymentsTable)
+      .set({ status: "paid", paidDate: now.toISOString().slice(0, 10) } as any)
       .where(and(
         eq(paymentsTable.contractId, id),
         isNull(paymentsTable.deletedAt),
-        inArray(paymentsTable.status, ["pending", "overdue"] as any),
+        inArray(paymentsTable.status, ["pending", "overdue", "partially_paid"] as any),
       ));
     return { success: true, message: "تم إنهاء العقد" };
   }

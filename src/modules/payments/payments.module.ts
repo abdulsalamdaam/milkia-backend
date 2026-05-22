@@ -76,7 +76,13 @@ class PaymentsController {
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
       .where(where)
-      .orderBy((q.order === "asc" ? asc : desc)(paymentsTable.dueDate))
+      // Primary: due date (soonest upcoming / oldest overdue first). Secondary:
+      // id — a deterministic tiebreaker so the most recently created
+      // installment sorts last among rows sharing a due date.
+      .orderBy(
+        (q.order === "asc" ? asc : desc)(paymentsTable.dueDate),
+        (q.order === "asc" ? asc : desc)(paymentsTable.id),
+      )
       .$dynamic();
     if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
 
