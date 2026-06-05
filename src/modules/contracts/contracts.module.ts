@@ -356,6 +356,15 @@ class ContractsController {
       .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, ownerId), isNull(contractsTable.deletedAt)));
     if (!contract) throw new NotFoundException("Contract not found");
 
+    // Never regenerate once money has been collected — re-creating rent rows
+    // alongside already-paid ones would duplicate periods. Only fully-pending
+    // contracts can be safely rebuilt from their (possibly edited) schedule.
+    const existing = await this.db.select({ status: paymentsTable.status }).from(paymentsTable)
+      .where(and(eq(paymentsTable.contractId, id), eq(paymentsTable.userId, ownerId), isNull(paymentsTable.deletedAt)));
+    if (existing.some((p) => p.status === "paid" || p.status === "partially_paid")) {
+      return { success: false, skipped: true, reason: "has_collected_payments", installmentsCreated: 0 };
+    }
+
     // Soft-delete pending installments before regenerating.
     await this.db.update(paymentsTable).set({ deletedAt: new Date() } as any).where(
       and(
