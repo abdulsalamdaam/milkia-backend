@@ -125,11 +125,23 @@ class TenantsController {
   @RequirePermissions(PERMISSIONS.TENANTS_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {
     const tid = parseInt(id, 10);
+    // Read the prior row so we can detect the draft → finalized transition
+    // and only send the welcome email once, when the tenant is actually
+    // being promoted from draft to finalized.
+    const [prior] = await this.db.select().from(tenantsTable)
+      .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, scopeId(user)), isNull(tenantsTable.deletedAt)));
+    if (!prior) throw new NotFoundException("غير موجود");
+
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
     const [tenant] = await this.db.update(tenantsTable).set(updateData)
       .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, scopeId(user)), isNull(tenantsTable.deletedAt))).returning();
     if (!tenant) throw new NotFoundException("غير موجود");
+
+    // Fire-and-forget welcome email on the draft → finalized transition.
+    if (body.sendWelcomeEmail && prior.isDraft && !tenant.isDraft && tenant.email) {
+      void this.email.sendTenantWelcome(tenant.email, tenant.name);
+    }
     return tenant;
   }
 
