@@ -1,4 +1,8 @@
-export type FeeEntry = { id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string };
+export type FeeEntry = {
+  id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string;
+  // Used when recurrence === "custom": a hand-built list of {dueDate, amount}.
+  customSchedule?: Array<{ dueDate: string; amount: string | number }>;
+};
 /** Per-year rent override — `year` is 1-based (year 1, 2, 3, …). */
 export type RentTerm = { year: number; amount: number };
 /** One hand-built rent installment for a custom payment schedule. */
@@ -123,6 +127,23 @@ function appendFees(
   const contractYears = Math.max(1, Math.ceil(totalMonths / 12));
 
   for (const fee of additionalFees) {
+    // Custom fee schedule — one row per hand-built {dueDate, amount}.
+    if (fee.recurrence === "custom") {
+      for (const e of fee.customSchedule || []) {
+        const amt = Number(e?.amount) || 0;
+        if (!e?.dueDate || amt <= 0) continue;
+        rows.push({
+          contractId, userId,
+          amount: round2(amt).toFixed(2),
+          dueDate: new Date(e.dueDate).toISOString().split("T")[0]!,
+          status: "pending",
+          description: fee.name,
+          isDemo: false,
+        });
+      }
+      continue;
+    }
+
     const feeAmt = parseFloat(fee.amount) || 0;
     if (feeAmt <= 0) continue;
 
