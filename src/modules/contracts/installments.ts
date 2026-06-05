@@ -2,6 +2,8 @@ export type FeeEntry = {
   id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string;
   // Used when recurrence === "custom": a hand-built list of {dueDate, amount}.
   customSchedule?: Array<{ dueDate: string; amount: string | number }>;
+  // When true, 15% VAT is added on top of every installment of this fee.
+  vat?: boolean;
 };
 /** Per-year rent override — `year` is 1-based (year 1, 2, 3, …). */
 export type RentTerm = { year: number; amount: number };
@@ -127,6 +129,9 @@ function appendFees(
   const contractYears = Math.max(1, Math.ceil(totalMonths / 12));
 
   for (const fee of additionalFees) {
+    // 15% VAT added on top of the fee when opted in.
+    const feeVat = fee.vat ? 1 + VAT_RATE : 1;
+
     // Custom fee schedule — one row per hand-built {dueDate, amount}.
     if (fee.recurrence === "custom") {
       for (const e of fee.customSchedule || []) {
@@ -134,7 +139,7 @@ function appendFees(
         if (!e?.dueDate || amt <= 0) continue;
         rows.push({
           contractId, userId,
-          amount: round2(amt).toFixed(2),
+          amount: round2(amt * feeVat).toFixed(2),
           dueDate: new Date(e.dueDate).toISOString().split("T")[0]!,
           status: "pending",
           description: fee.name,
@@ -144,7 +149,7 @@ function appendFees(
       continue;
     }
 
-    const feeAmt = parseFloat(fee.amount) || 0;
+    const feeAmt = (parseFloat(fee.amount) || 0) * feeVat;
     if (feeAmt <= 0) continue;
 
     const dates: Date[] = [];

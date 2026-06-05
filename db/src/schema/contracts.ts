@@ -71,7 +71,7 @@ export const contractsTable = pgTable("contracts", {
   agencyFee: numeric("agency_fee", { precision: 12, scale: 2 }),
   firstPaymentAmount: numeric("first_payment_amount", { precision: 12, scale: 2 }),
   // additional fees (الرسوم الإضافية)
-  additionalFees: jsonb("additional_fees").$type<Array<{ id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string; customSchedule?: Array<{ dueDate: string; amount: string | number }> }>>(),
+  additionalFees: jsonb("additional_fees").$type<Array<{ id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string; customSchedule?: Array<{ dueDate: string; amount: string | number }>; vat?: boolean }>>(),
   // Custom payment schedule — used only when paymentFrequency === 'custom'.
   // Each entry is one rent installment the user laid out by hand (a due
   // date + the amount due on that date). Replaces the periodic rent loop.
