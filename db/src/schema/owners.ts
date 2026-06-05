@@ -15,6 +15,8 @@ export const ownersTable = pgTable("owners", {
    */
   companyId: integer("company_id"),
   name: text("name").notNull(),
+  // Short / display name (الاسم المختصر) for quick reference across the UI.
+  shortName: text("short_name"),
   type: ownerTypeEnum("type").notNull().default("individual"),
   idNumber: text("id_number"),
   // nationality dropped (0024) — FK-only via nationalityLookupId.

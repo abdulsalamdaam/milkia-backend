@@ -16,7 +16,7 @@ import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolv
 const OWNER_LOOKUP_SPEC = [{ idField: "nationalityLookupId", out: "nationality", mode: "labelAr" as const }];
 
 const FIELDS = [
-  "name", "type", "status", "idNumber", "phone", "email", "iban",
+  "name", "shortName", "type", "status", "idNumber", "phone", "email", "iban",
   "managementFeePercent", "taxNumber", "address",
   "postalCode", "additionalNumber", "buildingNumber", "notes",
   // Representative (وكيل) fields — added in Phase 4 of the asset-tree redesign.
@@ -87,6 +87,7 @@ class OwnersController {
     const [owner] = await this.db.insert(ownersTable).values({
       userId: scopeId(user),
       name: body.name,
+      shortName: body.shortName ?? null,
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
       nationalityLookupId: body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality),

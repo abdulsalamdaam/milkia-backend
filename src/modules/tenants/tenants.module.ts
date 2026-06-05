@@ -13,7 +13,7 @@ import { listQuerySchema } from "../../common/pagination";
 import { EmailService } from "../email/email.service";
 
 const FIELDS = [
-  "name", "type", "status", "nationalId", "phone", "email", "taxNumber",
+  "name", "shortName", "type", "status", "nationalId", "phone", "email", "taxNumber",
   "address", "postalCode", "additionalNumber", "buildingNumber", "nationality", "notes",
   // Phase 4 additions: financial info, structured national address,
   // representative (وكيل) fields.
@@ -73,6 +73,7 @@ class TenantsController {
     const [tenant] = await this.db.insert(tenantsTable).values({
       userId: scopeId(user),
       name: body.name,
+      shortName: body.shortName ?? null,
       type: body.type || "individual",
       nationalId: body.nationalId ?? null,
       phone: body.phone ?? null,

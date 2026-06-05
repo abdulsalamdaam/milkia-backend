@@ -7,6 +7,8 @@ export const tenantsTable = pgTable("tenants", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),
   name: text("name").notNull(),
+  // Short / display name (الاسم المختصر) for quick reference across the UI.
+  shortName: text("short_name"),
   type: tenantTypeEnum("type").notNull().default("individual"),
   nationalId: text("national_id"),
   phone: text("phone"),
