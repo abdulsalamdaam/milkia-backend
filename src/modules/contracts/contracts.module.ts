@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, inArray } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable } from "@oqudk/database";
+import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable, tenantsTable } from "@oqudk/database";
 
 /** Parse + sanitise the per-year rent overrides sent by the client. */
 function parseRentTerms(raw: any): { year: number; amount: number }[] {
@@ -165,6 +165,7 @@ class ContractsController {
         tenantId: contractsTable.tenantId,
         tenantType: contractsTable.tenantType,
         tenantName: contractsTable.tenantName,
+        tenantShortName: tenantsTable.shortName,
         tenantIdNumber: contractsTable.tenantIdNumber,
         tenantPhone: contractsTable.tenantPhone,
         tenantNationality: contractsTable.tenantNationality,
@@ -211,6 +212,7 @@ class ContractsController {
         createdAt: contractsTable.createdAt,
       })
       .from(contractsTable)
+      .leftJoin(tenantsTable, eq(contractsTable.tenantId, tenantsTable.id))
       .where(where)
       .orderBy((q.order === "asc" ? asc : desc)(contractsTable.createdAt))
       .$dynamic();

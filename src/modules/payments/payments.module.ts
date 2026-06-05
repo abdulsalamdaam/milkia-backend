@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
-import { paymentsTable, paymentCollectionsTable, contractsTable } from "@oqudk/database";
+import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -72,9 +72,11 @@ class PaymentsController {
         createdAt: paymentsTable.createdAt,
         contractNumber: contractsTable.contractNumber,
         tenantName: contractsTable.tenantName,
+        tenantShortName: tenantsTable.shortName,
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
+      .leftJoin(tenantsTable, eq(contractsTable.tenantId, tenantsTable.id))
       .where(where)
       // Primary: due date (soonest upcoming / oldest overdue first). Secondary:
       // id — a deterministic tiebreaker so the most recently created
@@ -126,7 +128,7 @@ class PaymentsController {
       description: r.description,
       notes: r.notes,
       createdAt: r.createdAt,
-      contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName } : null,
+      contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName, tenantShortName: r.tenantShortName } : null,
     }));
     if (!usePaginated) return data;
 
