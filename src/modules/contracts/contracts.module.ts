@@ -30,7 +30,7 @@ const CONTRACT_FIELDS = [
   "startDate", "endDate", "monthlyRent", "paymentFrequency", "depositAmount",
   "depositStatus", "depositDueDate", "prepaidRent",
   "vatEnabled", "escalationRate", "escalationType",
-  "agencyFee", "firstPaymentAmount", "additionalFees",
+  "agencyFee", "firstPaymentAmount", "additionalFees", "customSchedule",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
   "status", "notes", "isDraft",
@@ -194,6 +194,7 @@ class ContractsController {
         agencyFee: contractsTable.agencyFee,
         firstPaymentAmount: contractsTable.firstPaymentAmount,
         additionalFees: contractsTable.additionalFees,
+        customSchedule: contractsTable.customSchedule,
         landlordName: contractsTable.landlordName,
         landlordNationality: contractsTable.landlordNationality,
         landlordIdNumber: contractsTable.landlordIdNumber,
@@ -255,6 +256,12 @@ class ContractsController {
     const contractNumber = `EQ-${Date.now()}-${ownerId}`;
 
     const additionalFees: FeeEntry[] | null = body.additionalFees && Array.isArray(body.additionalFees) && body.additionalFees.length > 0 ? body.additionalFees : null;
+    // Custom payment schedule — only kept when the cycle is "custom".
+    const customSchedule = freq === "custom" && Array.isArray(body.customSchedule)
+      ? body.customSchedule
+          .map((e: any) => ({ dueDate: String(e?.dueDate ?? "").slice(0, 10), amount: String(e?.amount ?? "") }))
+          .filter((e: any) => e.dueDate && Number(e.amount) > 0)
+      : null;
 
     const [contract] = await this.db.insert(contractsTable).values({
       userId: ownerId,
@@ -291,6 +298,7 @@ class ContractsController {
       agencyFee: body.agencyFee ? String(body.agencyFee) : null,
       firstPaymentAmount: body.firstPaymentAmount ? String(body.firstPaymentAmount) : null,
       additionalFees,
+      customSchedule: customSchedule && customSchedule.length > 0 ? customSchedule : null,
       landlordName: body.landlordName ?? null,
       landlordNationality: body.landlordNationality ?? null,
       landlordIdNumber: body.landlordIdNumber ?? null,
@@ -332,7 +340,7 @@ class ContractsController {
       contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
       Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
       body.escalationType === "amount" ? "amount" : "percent",
-      rentTerms, Number(body.prepaidRent) || 0,
+      rentTerms, Number(body.prepaidRent) || 0, customSchedule,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
 
@@ -370,6 +378,7 @@ class ContractsController {
       Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
       (contract as any).escalationType || "percent",
       rentTerms, Number((contract as any).prepaidRent) || 0,
+      ((contract as any).customSchedule as { dueDate: string; amount: string }[] | null) ?? null,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
     return { success: true, installmentsCreated: rows.length };

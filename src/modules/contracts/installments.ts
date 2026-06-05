@@ -1,6 +1,8 @@
 export type FeeEntry = { id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string };
 /** Per-year rent override — `year` is 1-based (year 1, 2, 3, …). */
 export type RentTerm = { year: number; amount: number };
+/** One hand-built rent installment for a custom payment schedule. */
+export type CustomScheduleEntry = { dueDate: string; amount: number | string };
 export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending"; description: string | null; isDemo: boolean };
 
 export const VAT_RATE = 0.15;
@@ -20,11 +22,37 @@ export function buildInstallments(
   escalationType = "percent",
   rentTerms?: RentTerm[] | null,
   prepaidRent = 0,
+  customSchedule?: CustomScheduleEntry[] | null,
 ): InstallmentRow[] {
   const monthly = parseFloat(monthlyRent) || 0;
   const start = new Date(startDate);
   const end = new Date(endDate);
   const rows: InstallmentRow[] = [];
+
+  // ── Custom payment schedule ──────────────────────────────────────────
+  // When the cycle is "custom", the rent rows come straight from the
+  // user-laid-out list (date + amount each). VAT, when on, is added on top
+  // of each entered amount, mirroring the periodic path. Prepaid rent and
+  // additional fees are still applied below via a shared exit.
+  if (paymentFrequency === "custom" && customSchedule && customSchedule.length > 0) {
+    const rentStart = rows.length;
+    for (const e of customSchedule) {
+      const base = Number(e.amount) || 0;
+      if (!e.dueDate || base <= 0) continue;
+      const amount = vatEnabled ? base * (1 + VAT_RATE) : base;
+      rows.push({
+        contractId, userId,
+        amount: round2(amount).toFixed(2),
+        dueDate: new Date(e.dueDate).toISOString().split("T")[0]!,
+        status: "pending",
+        description: null,
+        isDemo: false,
+      });
+    }
+    applyPrepaid(rows, rentStart, prepaidRent);
+    appendFees(rows, contractId, userId, start, end, additionalFees);
+    return sortRows(rows);
+  }
 
   let stepMonths = 1;
   if (paymentFrequency === "quarterly") stepMonths = 3;
@@ -67,7 +95,13 @@ export function buildInstallments(
     cursor.setMonth(cursor.getMonth() + stepMonths);
   }
 
-  // Prepaid rent is deducted from the earliest rent installment(s).
+  applyPrepaid(rows, rentStart, prepaidRent);
+  appendFees(rows, contractId, userId, start, end, additionalFees);
+  return sortRows(rows);
+}
+
+/** Deduct prepaid rent from the earliest rent installment(s), in place. */
+function applyPrepaid(rows: InstallmentRow[], rentStart: number, prepaidRent: number) {
   let leftover = round2(Number(prepaidRent) || 0);
   for (let i = rentStart; i < rows.length && leftover > 0; i++) {
     const amt = Number(rows[i]!.amount);
@@ -75,51 +109,59 @@ export function buildInstallments(
     rows[i]!.amount = round2(amt - ded).toFixed(2);
     leftover = round2(leftover - ded);
   }
+}
 
-  if (additionalFees && additionalFees.length > 0) {
-    const totalMonths = Math.max(1,
-      (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth())
-    );
-    const contractYears = Math.max(1, Math.ceil(totalMonths / 12));
+/** Append additional-fee installments across the contract span, in place. */
+function appendFees(
+  rows: InstallmentRow[], contractId: number, userId: number,
+  start: Date, end: Date, additionalFees?: FeeEntry[] | null,
+) {
+  if (!additionalFees || additionalFees.length === 0) return;
+  const totalMonths = Math.max(1,
+    (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth())
+  );
+  const contractYears = Math.max(1, Math.ceil(totalMonths / 12));
 
-    for (const fee of additionalFees) {
-      const feeAmt = parseFloat(fee.amount) || 0;
-      if (feeAmt <= 0) continue;
+  for (const fee of additionalFees) {
+    const feeAmt = parseFloat(fee.amount) || 0;
+    if (feeAmt <= 0) continue;
 
-      const dates: Date[] = [];
+    const dates: Date[] = [];
 
-      if (fee.recurrence === "one_time" || fee.recurrence === "once") {
-        dates.push(fee.dueDate ? new Date(fee.dueDate) : new Date(start));
-      } else if (fee.recurrence === "annual") {
-        for (let y = 0; y < contractYears; y++) {
-          const d = new Date(start);
-          d.setFullYear(d.getFullYear() + y);
-          if (d <= end) dates.push(d);
-        }
-      } else if (fee.recurrence === "semi_annual") {
-        let d = new Date(start);
-        while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 6); }
-      } else if (fee.recurrence === "quarterly") {
-        let d = new Date(start);
-        while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 3); }
-      } else {
-        let d = new Date(start);
-        while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 1); }
+    if (fee.recurrence === "one_time" || fee.recurrence === "once") {
+      dates.push(fee.dueDate ? new Date(fee.dueDate) : new Date(start));
+    } else if (fee.recurrence === "annual") {
+      for (let y = 0; y < contractYears; y++) {
+        const d = new Date(start);
+        d.setFullYear(d.getFullYear() + y);
+        if (d <= end) dates.push(d);
       }
+    } else if (fee.recurrence === "semi_annual") {
+      let d = new Date(start);
+      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 6); }
+    } else if (fee.recurrence === "quarterly") {
+      let d = new Date(start);
+      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 3); }
+    } else {
+      let d = new Date(start);
+      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 1); }
+    }
 
-      for (const d of dates) {
-        rows.push({
-          contractId, userId,
-          amount: round2(feeAmt).toFixed(2),
-          dueDate: d.toISOString().split("T")[0]!,
-          status: "pending",
-          description: fee.name,
-          isDemo: false,
-        });
-      }
+    for (const d of dates) {
+      rows.push({
+        contractId, userId,
+        amount: round2(feeAmt).toFixed(2),
+        dueDate: d.toISOString().split("T")[0]!,
+        status: "pending",
+        description: fee.name,
+        isDemo: false,
+      });
     }
   }
+}
 
+/** Sort by due date, with rent rows (null description) before fee rows. */
+function sortRows(rows: InstallmentRow[]): InstallmentRow[] {
   rows.sort((a, b) => {
     const dc = a.dueDate.localeCompare(b.dueDate);
     if (dc !== 0) return dc;
@@ -127,6 +169,5 @@ export function buildInstallments(
     if (a.description !== null && b.description === null) return 1;
     return 0;
   });
-
   return rows;
 }

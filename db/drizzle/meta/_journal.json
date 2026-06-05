@@ -260,6 +260,13 @@
       "when": 1779140100000,
       "tag": "0036_owner_is_default",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1779140160000,
+      "tag": "0037_contract_custom_schedule",
+      "breakpoints": true
     }
   ]
 }

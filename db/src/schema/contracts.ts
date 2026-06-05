@@ -5,7 +5,7 @@ import { usersTable } from "./users";
 import { tenantsTable } from "./tenants";
 
 export const contractStatusEnum = pgEnum("contract_status", ["active", "expired", "terminated", "pending"]);
-export const paymentFrequencyEnum = pgEnum("payment_frequency", ["monthly", "quarterly", "semi_annual", "annual"]);
+export const paymentFrequencyEnum = pgEnum("payment_frequency", ["monthly", "quarterly", "semi_annual", "annual", "custom"]);
 
 export const contractsTable = pgTable("contracts", {
   id: serial("id").primaryKey(),
@@ -72,6 +72,10 @@ export const contractsTable = pgTable("contracts", {
   firstPaymentAmount: numeric("first_payment_amount", { precision: 12, scale: 2 }),
   // additional fees (الرسوم الإضافية)
   additionalFees: jsonb("additional_fees").$type<Array<{ id: string; name: string; amount: string; recurrence: string; dueDate: string; paymentMethod: string }>>(),
+  // Custom payment schedule — used only when paymentFrequency === 'custom'.
+  // Each entry is one rent installment the user laid out by hand (a due
+  // date + the amount due on that date). Replaces the periodic rent loop.
+  customSchedule: jsonb("custom_schedule").$type<Array<{ dueDate: string; amount: string }>>(),
   // misc
   status: contractStatusEnum("status").notNull().default("active"),
   isDraft: boolean("is_draft").notNull().default(false),
