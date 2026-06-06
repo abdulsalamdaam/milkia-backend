@@ -16,6 +16,7 @@ import { DeedsModule } from "./modules/deeds/deeds.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UnitsModule } from "./modules/units/units.module";
 import { ContractsModule } from "./modules/contracts/contracts.module";
+import { ImportModule } from "./modules/import/import.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
 import { AdminModule } from "./modules/admin/admin.module";
 import { ProfileModule } from "./modules/profile/profile.module";
@@ -60,6 +61,7 @@ import { AuditModule } from "./modules/audit/audit.module";
     PropertiesModule,
     UnitsModule,
     ContractsModule,
+    ImportModule,
     PaymentsModule,
     PaymentConfirmationsModule,
     NotificationsModule,
