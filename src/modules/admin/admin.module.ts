@@ -11,6 +11,7 @@ import { seedDemoData } from "./demo-seed";
 import { ALL_PERMISSIONS, ROLE_PRESETS } from "../../common/permissions";
 import { EmailService } from "../email/email.service";
 import { isPackagePlan } from "../../common/packages";
+import { newEmailVerifyToken } from "../../common/email-verification";
 
 @ApiTags("admin")
 @ApiBearerAuth("user-jwt")
@@ -341,6 +342,8 @@ class AdminController {
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
         packagePlan: usersTable.packagePlan,
+        emailVerified: usersTable.emailVerified,
+        emailVerifiedAt: usersTable.emailVerifiedAt,
         roleKey: rolesTable.key,
         companyName: companiesTable.name,
       })
@@ -359,6 +362,8 @@ class AdminController {
       role: u.roleKey,
       accountStatus: u.accountStatus,
       isActive: u.isActive,
+      emailVerified: u.emailVerified,
+      emailVerifiedAt: u.emailVerifiedAt,
       createdAt: u.createdAt,
     }));
   }
@@ -418,6 +423,22 @@ class AdminController {
       .returning();
     if (!user) throw new NotFoundException("User not found");
     return { success: true, id: user.id, packagePlan: plan };
+  }
+
+  /** Re-send the email-verification link to a pending registrant. */
+  @Post("registrations/:id/resend-verification")
+  async resendVerification(@Param("id") id: string) {
+    const uid = parseInt(id, 10);
+    const [user] = await this.db.select().from(usersTable)
+      .where(and(eq(usersTable.id, uid), isNull(usersTable.deletedAt)));
+    if (!user) throw new NotFoundException("User not found");
+    if (user.emailVerified) return { success: true, alreadyVerified: true };
+    const verify = newEmailVerifyToken();
+    await this.db.update(usersTable)
+      .set({ emailVerifyTokenHash: verify.tokenHash, emailVerifyExpiresAt: verify.expiresAt })
+      .where(eq(usersTable.id, uid));
+    void this.email.sendVerifyEmail(user.email, user.name, verify.token, user.ownerUserId != null);
+    return { success: true };
   }
 
   @Patch("registrations/:id/reject")

@@ -10,6 +10,8 @@ import bcrypt from "bcryptjs";
 import { eq, and, asc, isNotNull, isNull } from "drizzle-orm";
 import { rolesTable, usersTable, type User } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
+import { EmailService } from "../email/email.service";
+import { newEmailVerifyToken } from "../../common/email-verification";
 
 type Public = Omit<User, "passwordHash">;
 
@@ -34,7 +36,10 @@ function strip(u: User): Public {
  */
 @Injectable()
 export class TeamService {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   /** Block employees from inviting other employees. Only landlords/admins can. */
   private assertCanManageTeam(actor: User) {
@@ -68,6 +73,8 @@ export class TeamService {
         phone: usersTable.phone,
         isActive: usersTable.isActive,
         accountStatus: usersTable.accountStatus,
+        emailVerified: usersTable.emailVerified,
+        emailVerifiedAt: usersTable.emailVerifiedAt,
         ownerUserId: usersTable.ownerUserId,
         roleId: usersTable.roleId,
         lastLoginAt: usersTable.lastLoginAt,
@@ -115,6 +122,8 @@ export class TeamService {
       ? input.password
       : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
     const passwordHash = await bcrypt.hash(effectivePassword, 10);
+    // Employees must verify their email before they can log in.
+    const verify = newEmailVerifyToken();
     const [created] = await this.db
       .insert(usersTable)
       .values({
@@ -128,9 +137,29 @@ export class TeamService {
         // Inherit the owning user's company so employees see the same data scope.
         companyId: actor.companyId ?? null,
         roleId,
+        emailVerified: false,
+        emailVerifyTokenHash: verify.tokenHash,
+        emailVerifyExpiresAt: verify.expiresAt,
       })
       .returning();
+    void this.email.sendVerifyEmail(created!.email, created!.name, verify.token, true);
     return strip(created!);
+  }
+
+  /** Re-send the email-verification link to an employee. */
+  async resendEmployeeVerification(actorId: number, employeeId: number): Promise<{ success: boolean; alreadyVerified?: boolean }> {
+    const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
+    if (!actor) throw new NotFoundException("Actor not found");
+    this.assertCanManageTeam(actor);
+    const [emp] = await this.db.select().from(usersTable).where(eq(usersTable.id, employeeId));
+    if (!emp || emp.ownerUserId !== actorId || emp.deletedAt) throw new NotFoundException("Employee not found");
+    if (emp.emailVerified) return { success: true, alreadyVerified: true };
+    const verify = newEmailVerifyToken();
+    await this.db.update(usersTable)
+      .set({ emailVerifyTokenHash: verify.tokenHash, emailVerifyExpiresAt: verify.expiresAt })
+      .where(eq(usersTable.id, employeeId));
+    void this.email.sendVerifyEmail(emp.email, emp.name, verify.token, true);
+    return { success: true };
   }
 
   async updateEmployee(

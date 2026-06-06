@@ -74,6 +74,11 @@ export class TeamController {
     return this.team.resetEmployeePassword(user.id, id, body.password);
   }
 
+  @Post("employees/:id/resend-verification")
+  resendVerification(@CurrentUser() user: AuthUser, @Param("id", ParseIntPipe) id: number) {
+    return this.team.resendEmployeeVerification(user.id, id);
+  }
+
   @Get("role-presets")
   presets() {
     return this.team.rolePresets();

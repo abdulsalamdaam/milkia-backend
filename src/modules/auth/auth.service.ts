@@ -10,6 +10,7 @@ import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { TwilioVerifyService } from "../twilio/twilio-verify.service";
 import { EmailService } from "../email/email.service";
 import { ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
+import { newEmailVerifyToken, hashEmailVerifyToken } from "../../common/email-verification";
 
 const MAX_FAILED = 5;
 /** Email-OTP code lifetime — drives the DB expiry, the email text, and the
@@ -157,6 +158,8 @@ export class AuthService {
         isActive: usersTable.isActive,
         accountStatus: usersTable.accountStatus,
         roleKey: rolesTable.key,
+        ownerUserId: usersTable.ownerUserId,
+        emailVerified: usersTable.emailVerified,
       })
       .from(usersTable)
       .leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
@@ -183,6 +186,10 @@ export class AuthService {
       }
       if (user.accountStatus === "rejected") {
         throw new ForbiddenException({ error: "تم رفض طلب تسجيلك. تواصل مع الدعم للمزيد من المعلومات", code: "REJECTED" });
+      }
+      // Employees can't log in until they verify their email.
+      if (user.ownerUserId != null && !user.emailVerified) {
+        throw new ForbiddenException({ error: "يرجى تأكيد بريدك الإلكتروني أولاً عبر الرابط المُرسَل إليك", code: "EMAIL_NOT_VERIFIED" });
       }
     }
     if (!user.isActive) throw new UnauthorizedException("الحساب غير مفعّل. تواصل مع الدعم");
@@ -364,6 +371,9 @@ export class AuthService {
       ? password
       : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
     const passwordHash = await bcrypt.hash(effectivePassword, 10);
+    // Email-verification token — the user must click the link before the
+    // admin approves. Stored as a sha256 hash with a 7-day expiry.
+    const verify = newEmailVerifyToken();
     const [user] = await this.db.insert(usersTable).values({
       email: email.toLowerCase(),
       passwordHash,
@@ -373,15 +383,55 @@ export class AuthService {
       phone: phone ?? null,
       roleId: userRoleRow?.id ?? null,
       userType,
+      emailVerified: false,
+      emailVerifyTokenHash: verify.tokenHash,
+      emailVerifyExpiresAt: verify.expiresAt,
     }).returning();
 
-    void this.email.sendWelcome(user!.email, user!.name);
+    void this.email.sendVerifyEmail(user!.email, user!.name, verify.token, false);
 
     return {
       pending: true,
-      message: "تم استلام طلب التسجيل بنجاح. سيتم مراجعة حسابك من قِبَل المشرف وإشعارك بالقبول.",
+      message: "تم استلام طلب التسجيل. أرسلنا رابط تأكيد إلى بريدك الإلكتروني — يرجى تأكيده، ثم سيقوم المشرف بمراجعة الحساب وتفعيله.",
       user: { id: user!.id, email: user!.email, name: user!.name, accountStatus: user!.accountStatus },
     };
+  }
+
+  /** Verify an email-verification token (from the link). */
+  async verifyEmail(token: string) {
+    const t = (token || "").trim();
+    if (!t) throw new BadRequestException("رابط غير صالح");
+    const tokenHash = hashEmailVerifyToken(t);
+    const [user] = await this.db.select().from(usersTable)
+      .where(and(eq(usersTable.emailVerifyTokenHash, tokenHash), isNull(usersTable.deletedAt)));
+    if (!user) throw new BadRequestException({ error: "رابط التأكيد غير صالح أو تم استخدامه مسبقاً", code: "INVALID_TOKEN" });
+    if (user.emailVerified) {
+      return { success: true, alreadyVerified: true, message: "تم تأكيد بريدك الإلكتروني مسبقاً" };
+    }
+    if (user.emailVerifyExpiresAt && new Date(user.emailVerifyExpiresAt).getTime() < Date.now()) {
+      throw new BadRequestException({ error: "انتهت صلاحية رابط التأكيد. اطلب رابطاً جديداً", code: "EXPIRED_TOKEN" });
+    }
+    await this.db.update(usersTable)
+      .set({ emailVerified: true, emailVerifiedAt: new Date(), emailVerifyTokenHash: null, emailVerifyExpiresAt: null })
+      .where(eq(usersTable.id, user.id));
+    return { success: true, alreadyVerified: false, message: "تم تأكيد بريدك الإلكتروني بنجاح" };
+  }
+
+  /** Re-issue + resend a verification link to an email (public). */
+  async resendVerification(email: string) {
+    const e = (email || "").trim().toLowerCase();
+    if (!e) throw new BadRequestException("البريد الإلكتروني مطلوب");
+    const [user] = await this.db.select().from(usersTable)
+      .where(and(eq(usersTable.email, e), isNull(usersTable.deletedAt)));
+    // Don't reveal whether the email exists.
+    if (!user) return { success: true };
+    if (user.emailVerified) return { success: true, alreadyVerified: true };
+    const verify = newEmailVerifyToken();
+    await this.db.update(usersTable)
+      .set({ emailVerifyTokenHash: verify.tokenHash, emailVerifyExpiresAt: verify.expiresAt })
+      .where(eq(usersTable.id, user.id));
+    void this.email.sendVerifyEmail(user.email, user.name, verify.token, user.ownerUserId != null);
+    return { success: true };
   }
 
   /**

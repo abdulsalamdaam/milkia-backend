@@ -27,6 +27,16 @@ export const usersTable = pgTable("users", {
   failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
   tokenVersion: integer("token_version").notNull().default(0),
   /**
+   * Email verification. The user/employee clicks a link sent to their inbox
+   * to set this true. Employees can't log in until verified; for new account
+   * registrations the admin sees the verification status before approving.
+   * The token is stored as a sha256 hash (searchable) with an expiry.
+   */
+  emailVerified: boolean("email_verified").notNull().default(false),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
+  emailVerifyTokenHash: text("email_verify_token_hash"),
+  emailVerifyExpiresAt: timestamp("email_verify_expires_at", { withTimezone: true }),
+  /**
    * If set, this user is an employee belonging to another user (the owner).
    * The employee inherits the owner's data scope (sees the owner's properties,
    * tenants, contracts, etc.). Null for top-level users (landlords/admins).

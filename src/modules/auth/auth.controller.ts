@@ -80,6 +80,22 @@ export class AuthController {
     return this.auth.register(body);
   }
 
+  // Confirm an email-verification token (from the link in the email).
+  @Post("verify-email")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 3600_000 } })
+  verifyEmail(@Body() body: { token?: string }) {
+    return this.auth.verifyEmail(body?.token ?? "");
+  }
+
+  // Re-send a verification link (public; doesn't reveal account existence).
+  @Post("resend-verification")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 5, ttl: 3600_000 } })
+  resendVerification(@Body() body: { email?: string }) {
+    return this.auth.resendVerification(body?.email ?? "");
+  }
+
   @Get("me")
   @UseGuards(JwtAuthGuard)
   me(@CurrentUser() user: AuthUser) {

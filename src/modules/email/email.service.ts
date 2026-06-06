@@ -15,6 +15,12 @@ const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://oqudk.com/logo.png
 const APP_IOS_URL = process.env.APP_IOS_URL || "https://oqudk.com";
 const APP_ANDROID_URL = process.env.APP_ANDROID_URL || "https://oqudk.com";
 
+/** Portal base URL — used to build email-verification links. */
+const APP_PUBLIC_URL = process.env.APP_PUBLIC_URL || "https://app.oqudk.com";
+export function buildVerifyEmailLink(token: string): string {
+  return `${APP_PUBLIC_URL.replace(/\/$/, "")}/verify-email?token=${encodeURIComponent(token)}`;
+}
+
 export interface SendEmailInput {
   to: string | string[];
   subject: string;
@@ -234,6 +240,37 @@ export class EmailService {
    * No-op when `to` is empty — tenants without an email on file simply don't
    * get notified (we do not throw).
    */
+  /**
+   * Email-verification link. Sent on registration and when an owner adds an
+   * employee (and on resend). `isEmployee` tweaks the copy.
+   */
+  async sendVerifyEmail(to: string, name: string, token: string, isEmployee = false): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const link = buildVerifyEmailLink(token);
+    const intro = isEmployee
+      ? "تمت إضافتك كموظف في حساب على منصة <strong>عقودك</strong>. لتفعيل دخولك، يرجى تأكيد بريدك الإلكتروني بالضغط على الزر أدناه."
+      : "شكراً لتسجيلك في <strong>عقودك</strong>. لإكمال طلبك، يرجى تأكيد بريدك الإلكتروني بالضغط على الزر أدناه، ثم سيقوم فريقنا بمراجعة الحساب وتفعيله.";
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">مرحباً ${safeName} 👋</h1>
+      <p style="margin:0 0 18px;color:#334155;line-height:1.7;">${intro}</p>
+      <p style="margin:0 0 24px;text-align:center;">
+        <a href="${link}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#ffffff;text-decoration:none;font-weight:700;padding:12px 28px;border-radius:10px;">
+          تأكيد البريد الإلكتروني
+        </a>
+      </p>
+      <p style="margin:0 0 8px;color:#64748b;font-size:13px;">أو انسخ الرابط التالي والصقه في المتصفح:</p>
+      <p style="margin:0 0 16px;word-break:break-all;"><a href="${link}" style="color:#2563eb;font-size:13px;">${link}</a></p>
+      <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;">الرابط صالح لمدة 7 أيام. إذا لم تطلب هذا، يمكنك تجاهل الرسالة.</p>
+    `);
+    return this.send({
+      to,
+      subject: "تأكيد بريدك الإلكتروني · عقودك",
+      html,
+      text: `مرحباً ${name}، يرجى تأكيد بريدك الإلكتروني عبر الرابط: ${link} (صالح 7 أيام).`,
+    });
+  }
+
   async sendMaintenanceAcknowledgment(to: string, payload: MaintenanceEmailPayload): Promise<boolean> {
     if (!to) return false;
     const html = layout(`
