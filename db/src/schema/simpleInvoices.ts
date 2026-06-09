@@ -19,6 +19,8 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   // Optional links to the rest of the domain.
   contractId: integer("contract_id"),
   paymentId: integer("payment_id"),
+  // When an invoice covers several same-day installments, all their ids.
+  paymentIds: jsonb("payment_ids").$type<number[]>(),
   tenantId: integer("tenant_id"),
   tenantName: text("tenant_name"),
   // Extra client contact details captured on the document itself.
