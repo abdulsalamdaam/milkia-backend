@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Inject, Module, Post, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull } from "drizzle-orm";
-import { usersTable, ownersTable, companiesTable } from "@oqudk/database";
+import { usersTable, ownersTable, companiesTable, tenantsTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -93,6 +93,28 @@ class PackageController {
             taxNumber: l.taxNumber ?? null,
           } as any);
         }
+      }
+    } else {
+      // Tenant package — onboarding IS adding the account holder as a tenant.
+      const tn = body?.tenant ?? {};
+      const [existing] = await this.db.select({ id: tenantsTable.id }).from(tenantsTable)
+        .where(and(eq(tenantsTable.userId, ownerId), isNull(tenantsTable.deletedAt)));
+      const values: any = {
+        name: (tn.name || body?.name || owner?.name || "").trim() || "—",
+        type: tn.type === "company" ? "company" : "individual",
+        nationalId: tn.nationalId ?? null,
+        phone: tn.phone ?? userPatch.phone ?? owner?.phone ?? null,
+        email: tn.email ?? null,
+        taxNumber: tn.taxNumber ?? null,
+        nationality: tn.nationality ?? null,
+        address: tn.address ?? null,
+        postalCode: tn.postalCode ?? null,
+        status: "active",
+      };
+      if (existing) {
+        await this.db.update(tenantsTable).set(values).where(eq(tenantsTable.id, existing.id));
+      } else {
+        await this.db.insert(tenantsTable).values({ userId: ownerId, ...values } as any);
       }
     }
 
