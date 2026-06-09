@@ -21,6 +21,8 @@ export interface PackageDef {
   maxLandlords: number;
   maxProperties: number;
   maxUnits: number;
+  /** Team members (employees) the owner may add — excludes the owner itself. */
+  maxUsers: number;
 }
 
 export const PACKAGES: Record<PackagePlan, PackageDef> = {
@@ -31,6 +33,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 10,
     maxUnits: 10,
+    maxUsers: 1,
   },
   advanced: {
     key: "advanced",
@@ -39,6 +42,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 50,
     maxUnits: 50,
+    maxUsers: 3,
   },
   professional: {
     key: "professional",
@@ -47,6 +51,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 200,
     maxUnits: 200,
+    maxUsers: 10,
   },
   enterprise: {
     key: "enterprise",
@@ -55,6 +60,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: UNLIMITED,
     maxUnits: UNLIMITED,
+    maxUsers: UNLIMITED,
   },
 };
 

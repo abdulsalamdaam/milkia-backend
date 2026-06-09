@@ -4,12 +4,20 @@
  * beyond the plan returns a clear error from the backend.
  */
 import { ForbiddenException } from "@nestjs/common";
-import { and, count, eq, isNull } from "drizzle-orm";
+import { and, count, eq, isNull, isNotNull } from "drizzle-orm";
 import { usersTable, propertiesTable, unitsTable, ownersTable } from "@oqudk/database";
 import type { Drizzle } from "../database/database.module";
 import { resolvePackage } from "./packages";
 
-export type QuotaResource = "properties" | "units" | "landlords";
+export type QuotaResource = "properties" | "units" | "landlords" | "users";
+
+/** Count the team members (employees) under an owner account. */
+export async function employeeCount(db: Drizzle, ownerId: number): Promise<number> {
+  const [r] = await db
+    .select({ c: count() }).from(usersTable)
+    .where(and(eq(usersTable.ownerUserId, ownerId), isNotNull(usersTable.ownerUserId), isNull(usersTable.deletedAt)));
+  return Number(r?.c ?? 0);
+}
 
 /** Current record counts for an owner account — drives the package usage UI. */
 export async function packageUsage(db: Drizzle, ownerId: number) {
@@ -23,10 +31,12 @@ export async function packageUsage(db: Drizzle, ownerId: number) {
   const [owners] = await db
     .select({ c: count() }).from(ownersTable)
     .where(and(eq(ownersTable.userId, ownerId), isNull(ownersTable.deletedAt)));
+  const employees = await employeeCount(db, ownerId);
   return {
     properties: Number(props?.c ?? 0),
     units: Number(units?.c ?? 0),
     landlords: Number(owners?.c ?? 0),
+    employees,
   };
 }
 
@@ -68,6 +78,10 @@ export async function assertWithinQuota(db: Drizzle, ownerId: number, resource: 
         isNull(propertiesTable.deletedAt),
       ));
     used = Number(r?.c ?? 0);
+  } else if (resource === "users") {
+    limit = pkg.maxUsers;
+    labelAr = "مستخدم"; labelEn = "team members";
+    used = await employeeCount(db, ownerId);
   } else {
     limit = pkg.maxLandlords;
     labelAr = "مالك"; labelEn = "landlords";

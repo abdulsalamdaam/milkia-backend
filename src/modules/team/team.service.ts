@@ -12,6 +12,8 @@ import { rolesTable, usersTable, type User } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { EmailService } from "../email/email.service";
 import { newEmailVerifyToken } from "../../common/email-verification";
+import { resolvePackage, UNLIMITED } from "../../common/packages";
+import { employeeCount } from "../../common/quota";
 
 type Public = Omit<User, "passwordHash">;
 
@@ -103,11 +105,16 @@ export class TeamService {
     const email = input.email.trim().toLowerCase();
     if (!email) throw new BadRequestException("Email is required");
 
-    // One-employee cap for now.
-    const team = await this.db.select({ id: usersTable.id }).from(usersTable)
-      .where(and(eq(usersTable.ownerUserId, actorId), isNotNull(usersTable.ownerUserId), isNull(usersTable.deletedAt)));
-    if (team.length >= 1) {
-      throw new BadRequestException("لا يمكن إضافة أكثر من موظف واحد حالياً · You can only add one employee");
+    // Team-member cap driven by the owner account's subscription package.
+    const ownerId = actor.ownerUserId ?? actor.id;
+    const pkg = resolvePackage(actor.packagePlan);
+    const used = await employeeCount(this.db, ownerId);
+    if (used >= pkg.maxUsers) {
+      const limit = pkg.maxUsers >= UNLIMITED ? "∞" : String(pkg.maxUsers);
+      throw new BadRequestException(
+        `لقد بلغت الحد الأقصى لباقتك (${limit} مستخدم). لإضافة المزيد يرجى ترقية الباقة. ` +
+        `· Your ${pkg.labelEn} plan allows up to ${limit} team members.`,
+      );
     }
 
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email), isNull(usersTable.deletedAt)));
