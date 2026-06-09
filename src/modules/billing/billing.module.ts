@@ -174,26 +174,53 @@ class SimpleInvoicesController {
     if (doc.status === "confirmed") throw new BadRequestException("المستند مؤكَّد مسبقاً");
 
     const paidDate = body?.paidDate || today();
-    const isInvoice = doc.type === "invoice";
-    const voucherNumber = isInvoice ? `RV-${String(doc.id).padStart(6, "0")}` : null;
-    // The collection carries the user-supplied receipt/reference if given,
-    // else falls back to the generated voucher number.
+    const type = doc.type;
+    const isInvoice = type === "invoice";
+    const isCredit = type === "credit";
+    // Credit notes reduce what was collected (refund); invoices and debit
+    // notes add to it.
+    const sign = isCredit ? -1 : 1;
+    const prefix = isInvoice ? "RV" : isCredit ? "CN" : "DN";
+    const voucherNumber = `${prefix}-${String(doc.id).padStart(6, "0")}`;
     const collectionReceipt = (body?.receiptNumber && String(body.receiptNumber).trim()) || voucherNumber;
-    const method = body?.method ?? "invoice";
+    const method = body?.method ?? (isInvoice ? "invoice" : type);
 
-    // Record a collection on the linked installment, if any (invoices only).
-    if (isInvoice && doc.paymentId) {
+    // Resolve the installment this document posts against. Invoices link
+    // directly via paymentId; credit/debit notes resolve through the invoice
+    // they reference (billingReference → that invoice's installment).
+    let targetPaymentId: number | null = isInvoice ? doc.paymentId : null;
+    if (!isInvoice && doc.billingReference) {
+      const [refInv] = await this.db.select({ paymentId: simpleInvoicesTable.paymentId })
+        .from(simpleInvoicesTable)
+        .where(and(
+          eq(simpleInvoicesTable.userId, scopeId(user)),
+          eq(simpleInvoicesTable.type, "invoice"),
+          eq(simpleInvoicesTable.number, doc.billingReference),
+          isNull(simpleInvoicesTable.deletedAt),
+        ));
+      targetPaymentId = refInv?.paymentId ?? null;
+    }
+
+    if (targetPaymentId) {
       const [payment] = await this.db.select().from(paymentsTable)
-        .where(and(eq(paymentsTable.id, doc.paymentId), eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt)));
+        .where(and(eq(paymentsTable.id, targetPaymentId), eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt)));
       if (payment && payment.status !== "cancelled") {
         const prior = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
           .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, payment.id));
         const collectedBefore = round2(Number(prior[0]?.total ?? 0));
         const totalDue = round2(Number(payment.amount));
-        const remaining = round2(totalDue - collectedBefore);
-        const requested = body?.amount != null ? round2(Number(body.amount)) : Number(doc.total);
-        const amount = round2(Math.min(requested, remaining));
-        if (amount > 0.01) {
+        let amount: number;
+        if (isInvoice) {
+          // Invoice: positive, capped at the remaining balance.
+          const remaining = round2(totalDue - collectedBefore);
+          const requested = body?.amount != null ? round2(Number(body.amount)) : Number(doc.total);
+          amount = round2(Math.min(requested, remaining));
+        } else {
+          // Credit/debit note: signed adjustment, uncapped (refund / extra charge).
+          const magnitude = body?.amount != null ? round2(Math.abs(Number(body.amount))) : round2(Number(doc.total));
+          amount = round2(sign * magnitude);
+        }
+        if (Math.abs(amount) > 0.01) {
           await this.db.insert(paymentCollectionsTable).values({
             paymentId: payment.id,
             userId: scopeId(user),
@@ -202,13 +229,13 @@ class SimpleInvoicesController {
             method,
             receiptNumber: collectionReceipt,
             attachmentKey: body?.attachmentKey ?? null,
-            notes: body?.notes ?? `فاتورة ${doc.number}`,
+            notes: body?.notes ?? `${doc.type === "credit" ? "إشعار دائن" : doc.type === "debit" ? "إشعار مدين" : "فاتورة"} ${doc.number}`,
           });
           const collectedAfter = round2(collectedBefore + amount);
-          const fullyPaid = collectedAfter >= totalDue - 0.01;
+          const status = collectedAfter >= totalDue - 0.01 ? "paid" : collectedAfter > 0.01 ? "partially_paid" : "pending";
           await this.db.update(paymentsTable).set({
-            status: fullyPaid ? "paid" : "partially_paid",
-            paidDate: fullyPaid ? paidDate : payment.paidDate,
+            status,
+            paidDate: status === "paid" ? paidDate : status === "pending" ? null : payment.paidDate,
             receiptNumber: collectionReceipt ?? payment.receiptNumber,
           }).where(eq(paymentsTable.id, payment.id));
         }
@@ -218,9 +245,9 @@ class SimpleInvoicesController {
     const [updated] = await this.db.update(simpleInvoicesTable).set({
       status: "confirmed",
       confirmedAt: new Date(),
-      paidDate: isInvoice ? paidDate : doc.paidDate,
+      paidDate,
       receiptNumber: voucherNumber,
-      paymentMethod: isInvoice ? method : doc.paymentMethod,
+      paymentMethod: method,
       attachmentKey: body?.attachmentKey ?? doc.attachmentKey,
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, scopeId(user)))).returning();
     return updated;
