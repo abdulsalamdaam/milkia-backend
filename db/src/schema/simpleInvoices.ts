@@ -31,6 +31,8 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   dueDate: date("due_date"),
   confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
   paidDate: date("paid_date"),
+  // Payment method captured at the collection step (bank_transfer/cash/…).
+  paymentMethod: text("payment_method"),
   // Receipt-voucher number, stamped when an invoice is confirmed.
   receiptNumber: text("receipt_number"),
   // For credit/debit notes — the original invoice number being adjusted.

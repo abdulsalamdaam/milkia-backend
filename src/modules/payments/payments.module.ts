@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
-import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable } from "@oqudk/database";
+import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -201,16 +201,14 @@ class PaymentsController {
   @RequirePermissions(PERMISSIONS.PAYMENTS_VIEW)
   async listAllCollections(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
     const q = listQuerySchema.parse(rawQuery ?? {});
-    const conds = [eq(paymentCollectionsTable.userId, scopeId(user))];
-    if (q.search) {
-      conds.push(or(
-        ilike(paymentCollectionsTable.receiptNumber, `%${q.search}%`),
-        ilike(contractsTable.tenantName, `%${q.search}%`),
-        ilike(contractsTable.contractNumber, `%${q.search}%`),
-      ) as any);
-    }
-    const where = and(...conds);
-    const rowsQ = this.db
+    const uid = scopeId(user);
+    const s = q.search ? `%${q.search}%` : null;
+
+    // 1. Real collections (money received against installments — this also
+    //    covers invoices that were linked to an installment).
+    const collConds: any[] = [eq(paymentCollectionsTable.userId, uid)];
+    if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s)));
+    const collections = await this.db
       .select({
         id: paymentCollectionsTable.id,
         paymentId: paymentCollectionsTable.paymentId,
@@ -227,21 +225,62 @@ class PaymentsController {
       .from(paymentCollectionsTable)
       .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
-      .where(where)
-      .orderBy((q.order === "asc" ? asc : desc)(paymentCollectionsTable.collectedDate), desc(paymentCollectionsTable.id))
-      .limit(q.pageSize).offset((q.page - 1) * q.pageSize);
-    const [rows, totalRow, totalAmt] = await Promise.all([
-      rowsQ,
-      this.db.select({ total: count() }).from(paymentCollectionsTable)
-        .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
-        .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id)).where(where),
-      this.db.select({ amount: sum(paymentCollectionsTable.amount) })
-        .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.userId, scopeId(user))),
-    ]);
-    const total = Number(totalRow[0]?.total ?? 0);
+      .where(and(...collConds));
+
+    // 2. Confirmed invoices NOT linked to an installment (free invoices) —
+    //    surfaced as collection entries so every confirmed invoice's money
+    //    shows in the Collections tab with its chosen method.
+    const invConds: any[] = [
+      eq(simpleInvoicesTable.userId, uid),
+      eq(simpleInvoicesTable.status, "confirmed"),
+      eq(simpleInvoicesTable.type, "invoice"),
+      isNull(simpleInvoicesTable.paymentId),
+      isNull(simpleInvoicesTable.deletedAt),
+    ];
+    if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s)));
+    const freeInvoices = await this.db
+      .select({
+        id: simpleInvoicesTable.id,
+        amount: simpleInvoicesTable.total,
+        collectedDate: simpleInvoicesTable.paidDate,
+        method: simpleInvoicesTable.paymentMethod,
+        receiptNumber: simpleInvoicesTable.receiptNumber,
+        number: simpleInvoicesTable.number,
+        tenantName: simpleInvoicesTable.tenantName,
+        createdAt: simpleInvoicesTable.confirmedAt,
+      })
+      .from(simpleInvoicesTable)
+      .where(and(...invConds));
+
+    // Unify both sources into one collection shape.
+    const merged = [
+      ...collections.map((c) => ({ ...c })),
+      ...freeInvoices.map((iv) => ({
+        id: -iv.id, // negative id-space avoids collision with collection ids
+        paymentId: null as number | null,
+        amount: iv.amount,
+        collectedDate: iv.collectedDate,
+        method: iv.method,
+        receiptNumber: iv.receiptNumber,
+        notes: iv.number,
+        createdAt: iv.createdAt as any,
+        contractId: null as number | null,
+        contractNumber: null as string | null,
+        tenantName: iv.tenantName,
+      })),
+    ];
+    merged.sort((a, b) => {
+      const da = new Date(a.collectedDate || a.createdAt || 0).getTime();
+      const db = new Date(b.collectedDate || b.createdAt || 0).getTime();
+      return q.order === "asc" ? da - db : db - da;
+    });
+
+    const total = merged.length;
+    const totalCollected = round2(merged.reduce((acc, r) => acc + Number(r.amount ?? 0), 0));
+    const pageRows = merged.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
     return {
-      data: rows, page: q.page, pageSize: q.pageSize, total,
-      stats: { totalCollected: round2(Number(totalAmt[0]?.amount ?? 0)), count: total },
+      data: pageRows, page: q.page, pageSize: q.pageSize, total,
+      stats: { totalCollected, count: total },
     };
   }
 

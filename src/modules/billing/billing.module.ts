@@ -219,6 +219,7 @@ class SimpleInvoicesController {
       confirmedAt: new Date(),
       paidDate: isInvoice ? paidDate : doc.paidDate,
       receiptNumber: voucherNumber,
+      paymentMethod: isInvoice ? method : doc.paymentMethod,
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, scopeId(user)))).returning();
     return updated;
   }

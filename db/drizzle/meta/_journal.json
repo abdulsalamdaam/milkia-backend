@@ -295,6 +295,13 @@
       "when": 1779140400000,
       "tag": "0041_simple_invoice_client",
       "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1779140460000,
+      "tag": "0042_simple_invoice_method",
+      "breakpoints": true
     }
   ]
 }
