@@ -113,11 +113,29 @@ class SimpleInvoicesController {
     let contractId = body?.contractId ?? null;
     let tenantId = body?.tenantId ?? null;
     let tenantName = body?.tenantName ?? null;
+    let client = body?.client ?? null;
     if (body?.paymentId) {
       const [pay] = await this.db.select({ contractId: paymentsTable.contractId, tenantName: contractsTable.tenantName, tenantId: contractsTable.tenantId })
         .from(paymentsTable).leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
         .where(and(eq(paymentsTable.id, Number(body.paymentId)), eq(paymentsTable.userId, scopeId(user))));
       if (pay) { contractId = contractId ?? pay.contractId; tenantId = tenantId ?? pay.tenantId; tenantName = tenantName ?? pay.tenantName; }
+    }
+    // Credit/debit note: snapshot client + contract from the referenced invoice
+    // (the note's parties come from the invoice, not entered manually).
+    if ((type === "credit" || type === "debit") && body?.billingReference) {
+      const [refInv] = await this.db.select({
+        contractId: simpleInvoicesTable.contractId, tenantId: simpleInvoicesTable.tenantId,
+        tenantName: simpleInvoicesTable.tenantName, client: simpleInvoicesTable.client,
+      }).from(simpleInvoicesTable).where(and(
+        eq(simpleInvoicesTable.userId, scopeId(user)), eq(simpleInvoicesTable.type, "invoice"),
+        eq(simpleInvoicesTable.number, String(body.billingReference)), isNull(simpleInvoicesTable.deletedAt),
+      ));
+      if (refInv) {
+        contractId = contractId ?? refInv.contractId;
+        tenantId = tenantId ?? refInv.tenantId;
+        tenantName = refInv.tenantName ?? tenantName;
+        client = refInv.client ?? client;
+      }
     }
 
     const paymentIds: number[] = Array.isArray(body?.paymentIds)
@@ -134,7 +152,7 @@ class SimpleInvoicesController {
       paymentIds: paymentIds.length ? paymentIds : null,
       tenantId: tenantId ?? null,
       tenantName: tenantName ?? null,
-      client: body?.client ?? null,
+      client: client ?? null,
       items,
       subtotal: subtotal.toFixed(2),
       total: total.toFixed(2),
