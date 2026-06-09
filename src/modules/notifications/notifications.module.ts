@@ -15,6 +15,8 @@ import { scopeId } from "../../common/scope";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
 import { sendExpoPush } from "../../common/push";
+import { IsInt, IsString, IsNotEmpty, IsOptional } from "class-validator";
+import { Type } from "class-transformer";
 
 /* ─────────────── Tenant side — read ─────────────── */
 
@@ -75,9 +77,22 @@ export class TenantNotificationsController {
 /* ─────────────── Landlord side — send ─────────────── */
 
 class SendNotificationDto {
+  // Global ValidationPipe has whitelist:true — every field must be decorated
+  // or it gets stripped (which previously left the body empty → 400).
+  @Type(() => Number)
+  @IsInt()
   tenantId!: number;
+
+  @IsString()
+  @IsNotEmpty()
   title!: string;
+
+  @IsString()
+  @IsNotEmpty()
   body!: string;
+
+  @IsOptional()
+  @IsString()
   type?: string;
 }
 
