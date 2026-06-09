@@ -18,6 +18,7 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { notifyTenant } from "../../common/notify";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
 import { UploadsService } from "../uploads/uploads.service";
@@ -325,13 +326,13 @@ export class PaymentConfirmationsController {
         ));
     }
 
-    // Notify the tenant of the landlord's decision so it surfaces in the
-    // mobile app's notifications screen.
+    // Notify the tenant of the landlord's decision — in-app row + push to the
+    // device so it surfaces in the mobile app immediately.
     if (row.tenantId) {
       const amount = Number(row.amount || 0).toLocaleString("en-US");
       const approved = body.status === "approved";
       const note = body.reviewNote?.toString().trim();
-      await this.db.insert(notificationsTable).values({
+      await notifyTenant(this.db, {
         userId: row.userId,
         tenantId: row.tenantId,
         type: approved ? "payment_approved" : "payment_rejected",
@@ -339,6 +340,7 @@ export class PaymentConfirmationsController {
         body: approved
           ? `تم اعتماد دفعتك بمبلغ ${amount} ر.س وتسجيلها كمسددة.`
           : `تم رفض طلب تأكيد الدفع بمبلغ ${amount} ر.س.${note ? ` السبب: ${note}` : ""}`,
+        data: { paymentId: row.paymentId, confirmationId: row.id },
       });
     }
 

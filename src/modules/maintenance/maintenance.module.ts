@@ -3,7 +3,15 @@ import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, asc, desc, eq, isNull, or, ilike, count } from "drizzle-orm";
 import { maintenanceRequestsTable, contractsTable, contractUnitsTable, unitsTable, propertiesTable, tenantsTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
+import { notifyTenant } from "../../common/notify";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
+
+const MAINTENANCE_STATUS_AR: Record<string, string> = {
+  open: "مفتوح",
+  in_progress: "قيد التنفيذ",
+  pending_approval: "بانتظار الموافقة",
+  completed: "مكتمل",
+};
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
@@ -224,20 +232,32 @@ class MaintenanceController {
   private async notifyTenantOfStatusChange(row: typeof maintenanceRequestsTable.$inferSelect, previousStatus: string | null) {
     try {
       if (!row.tenantId) return;
+      // In-app notification + push to the tenant's device.
+      const label = MAINTENANCE_STATUS_AR[row.status] ?? row.status;
+      await notifyTenant(this.db, {
+        userId: row.userId,
+        tenantId: row.tenantId,
+        title: "تحديث على طلب الصيانة",
+        body: `تم تحديث حالة طلب الصيانة${row.unitLabel ? ` (${row.unitLabel})` : ""} إلى: ${label}`,
+        type: "maintenance_status",
+        data: { maintenanceId: row.id, status: row.status },
+      });
+      // Email (best-effort).
       const [tenant] = await this.db
         .select({ name: tenantsTable.name, email: tenantsTable.email })
         .from(tenantsTable)
         .where(eq(tenantsTable.id, row.tenantId));
-      if (!tenant?.email) return;
-      await this.email.sendMaintenanceStatusChanged(tenant.email, {
-        id: row.id,
-        unitLabel: row.unitLabel,
-        description: row.description,
-        priority: row.priority,
-        status: row.status,
-        tenantName: tenant.name,
-        previousStatus,
-      });
+      if (tenant?.email) {
+        await this.email.sendMaintenanceStatusChanged(tenant.email, {
+          id: row.id,
+          unitLabel: row.unitLabel,
+          description: row.description,
+          priority: row.priority,
+          status: row.status,
+          tenantName: tenant.name,
+          previousStatus,
+        });
+      }
     } catch (err) {
       console.error("[maintenance] notifyTenantOfStatusChange failed:", err);
     }
