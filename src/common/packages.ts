@@ -33,14 +33,17 @@ export interface PackageDef {
 export const PACKAGES: Record<PackagePlan, PackageDef> = {
   // Tenant package — a self-managed personal tracker (1 unit, no team, no
   // financials/reports/maintenance). The account holder IS the tenant.
+  // Landing limits: Tenant 50 units / 1 user, Basic 500 / 3, Pro 1,000 / 6,
+  // Enterprise unlimited. The landing "users" count includes the account
+  // holder, so maxUsers (added employees) = that number − 1.
   tenant: {
     key: "tenant",
     labelAr: "المستأجرين",
     labelEn: "Tenants",
     mode: "tenant",
     maxLandlords: 0,
-    maxProperties: 1,
-    maxUnits: 1,
+    maxProperties: 50,
+    maxUnits: 50,
     maxUsers: 0,
   },
   basic: {
@@ -49,33 +52,34 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     labelEn: "Basic",
     mode: "landlord",
     maxLandlords: UNLIMITED,
-    maxProperties: 10,
-    maxUnits: 10,
-    maxUsers: 1,
+    maxProperties: 500,
+    maxUnits: 500,
+    maxUsers: 2,
   },
+  // Legacy tier — not offered anymore; mapped to the closest current limits.
   advanced: {
     key: "advanced",
     labelAr: "المتقدمة",
     labelEn: "Advanced",
     mode: "landlord",
     maxLandlords: UNLIMITED,
-    maxProperties: 50,
-    maxUnits: 50,
-    maxUsers: 3,
+    maxProperties: 500,
+    maxUnits: 500,
+    maxUsers: 2,
   },
   professional: {
     key: "professional",
-    labelAr: "الاحترافية",
-    labelEn: "Professional",
+    labelAr: "المطورة",
+    labelEn: "Pro",
     mode: "landlord",
     maxLandlords: UNLIMITED,
-    maxProperties: 200,
-    maxUnits: 200,
-    maxUsers: 10,
+    maxProperties: 1000,
+    maxUnits: 1000,
+    maxUsers: 5,
   },
   enterprise: {
     key: "enterprise",
-    labelAr: "المؤسسات",
+    labelAr: "الأعمال",
     labelEn: "Enterprise",
     mode: "landlord",
     maxLandlords: UNLIMITED,
