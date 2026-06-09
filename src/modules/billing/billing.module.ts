@@ -297,6 +297,7 @@ class SimpleInvoicesController {
         method,
         receiptNumber: receipt,
         attachmentKey: body?.attachmentKey ?? null,
+        invoiceId: doc.id,
         notes: body?.notes ?? `فاتورة ${doc.number}`,
       });
       const collectedAfter = round2(collectedBefore + amt);

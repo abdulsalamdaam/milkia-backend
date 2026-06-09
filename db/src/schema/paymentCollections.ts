@@ -23,6 +23,9 @@ export const paymentCollectionsTable = pgTable("payment_collections", {
   receiptNumber: text("receipt_number"),
   // MinIO object key for the evidence document attached to this collection.
   attachmentKey: text("attachment_key"),
+  // The simple-invoice this collection was recorded for (when collected via
+  // an invoice) — lets the Collections tab link back to the invoice.
+  invoiceId: integer("invoice_id"),
   notes: text("notes"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({

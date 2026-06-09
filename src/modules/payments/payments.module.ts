@@ -79,12 +79,12 @@ class PaymentsController {
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
       .leftJoin(tenantsTable, eq(contractsTable.tenantId, tenantsTable.id))
       .where(where)
-      // Primary: due date (soonest upcoming / oldest overdue first). Secondary:
-      // id — a deterministic tiebreaker so the most recently created
-      // installment sorts last among rows sharing a due date.
+      // Default: due date (soonest upcoming / oldest overdue first). The
+      // Payments tab passes sort=createdAt to show the most recent first.
       .orderBy(
-        (q.order === "asc" ? asc : desc)(paymentsTable.dueDate),
-        (q.order === "asc" ? asc : desc)(paymentsTable.id),
+        ...(rawQuery?.sort === "createdAt"
+          ? [desc(paymentsTable.createdAt), desc(paymentsTable.id)]
+          : [(q.order === "asc" ? asc : desc)(paymentsTable.dueDate), (q.order === "asc" ? asc : desc)(paymentsTable.id)]),
       )
       .$dynamic();
     if (usePaginated) rowsQ = rowsQ.limit(q.pageSize).offset((q.page - 1) * q.pageSize);
@@ -209,7 +209,7 @@ class PaymentsController {
     // 1. Real collections (money received against installments — this also
     //    covers invoices that were linked to an installment).
     const collConds: any[] = [eq(paymentCollectionsTable.userId, uid)];
-    if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s)));
+    if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s), ilike(simpleInvoicesTable.number, s)));
     const collections = await this.db
       .select({
         id: paymentCollectionsTable.id,
@@ -224,10 +224,13 @@ class PaymentsController {
         contractId: paymentsTable.contractId,
         contractNumber: contractsTable.contractNumber,
         tenantName: contractsTable.tenantName,
+        invoiceId: paymentCollectionsTable.invoiceId,
+        invoiceNumber: simpleInvoicesTable.number,
       })
       .from(paymentCollectionsTable)
       .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
+      .leftJoin(simpleInvoicesTable, eq(paymentCollectionsTable.invoiceId, simpleInvoicesTable.id))
       .where(and(...collConds));
 
     // 2. Confirmed invoices NOT linked to an installment (free invoices) —
@@ -254,6 +257,7 @@ class PaymentsController {
         createdAt: simpleInvoicesTable.confirmedAt,
         contractId: simpleInvoicesTable.contractId,
         contractNumber: contractsTable.contractNumber,
+        invoiceId: simpleInvoicesTable.id,
       })
       .from(simpleInvoicesTable)
       .leftJoin(contractsTable, eq(simpleInvoicesTable.contractId, contractsTable.id))
@@ -275,11 +279,14 @@ class PaymentsController {
         contractId: iv.contractId,
         contractNumber: iv.contractNumber,
         tenantName: iv.tenantName,
+        invoiceId: iv.invoiceId,
+        invoiceNumber: iv.number,
       })),
     ];
+    // Newest first by creation time.
     merged.sort((a, b) => {
-      const da = new Date(a.collectedDate || a.createdAt || 0).getTime();
-      const db = new Date(b.collectedDate || b.createdAt || 0).getTime();
+      const da = new Date(a.createdAt || a.collectedDate || 0).getTime();
+      const db = new Date(b.createdAt || b.collectedDate || 0).getTime();
       return q.order === "asc" ? da - db : db - da;
     });
 
