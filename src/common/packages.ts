@@ -44,7 +44,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: 0,
     maxProperties: 50,
     maxUnits: 50,
-    maxUsers: 0,
+    maxUsers: 1,
   },
   basic: {
     key: "basic",
@@ -54,7 +54,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 500,
     maxUnits: 500,
-    maxUsers: 2,
+    maxUsers: 3,
   },
   // Legacy tier — not offered anymore; mapped to the closest current limits.
   advanced: {
@@ -65,7 +65,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 500,
     maxUnits: 500,
-    maxUsers: 2,
+    maxUsers: 3,
   },
   professional: {
     key: "professional",
@@ -75,7 +75,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     maxLandlords: UNLIMITED,
     maxProperties: 1000,
     maxUnits: 1000,
-    maxUsers: 5,
+    maxUsers: 6,
   },
   enterprise: {
     key: "enterprise",
