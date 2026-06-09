@@ -73,6 +73,7 @@ class PaymentsController {
         contractNumber: contractsTable.contractNumber,
         tenantName: contractsTable.tenantName,
         tenantShortName: tenantsTable.shortName,
+        vatEnabled: contractsTable.vatEnabled,
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
@@ -128,7 +129,8 @@ class PaymentsController {
       description: r.description,
       notes: r.notes,
       createdAt: r.createdAt,
-      contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName, tenantShortName: r.tenantShortName } : null,
+      vatEnabled: !!(r as any).vatEnabled,
+      contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName, tenantShortName: r.tenantShortName, vatEnabled: !!(r as any).vatEnabled } : null,
     }));
     if (!usePaginated) return data;
 
@@ -216,6 +218,7 @@ class PaymentsController {
         collectedDate: paymentCollectionsTable.collectedDate,
         method: paymentCollectionsTable.method,
         receiptNumber: paymentCollectionsTable.receiptNumber,
+        attachmentKey: paymentCollectionsTable.attachmentKey,
         notes: paymentCollectionsTable.notes,
         createdAt: paymentCollectionsTable.createdAt,
         contractId: paymentsTable.contractId,
@@ -237,7 +240,7 @@ class PaymentsController {
       isNull(simpleInvoicesTable.paymentId),
       isNull(simpleInvoicesTable.deletedAt),
     ];
-    if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s)));
+    if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s), ilike(contractsTable.contractNumber, s)));
     const freeInvoices = await this.db
       .select({
         id: simpleInvoicesTable.id,
@@ -245,11 +248,15 @@ class PaymentsController {
         collectedDate: simpleInvoicesTable.paidDate,
         method: simpleInvoicesTable.paymentMethod,
         receiptNumber: simpleInvoicesTable.receiptNumber,
+        attachmentKey: simpleInvoicesTable.attachmentKey,
         number: simpleInvoicesTable.number,
         tenantName: simpleInvoicesTable.tenantName,
         createdAt: simpleInvoicesTable.confirmedAt,
+        contractId: simpleInvoicesTable.contractId,
+        contractNumber: contractsTable.contractNumber,
       })
       .from(simpleInvoicesTable)
+      .leftJoin(contractsTable, eq(simpleInvoicesTable.contractId, contractsTable.id))
       .where(and(...invConds));
 
     // Unify both sources into one collection shape.
@@ -262,10 +269,11 @@ class PaymentsController {
         collectedDate: iv.collectedDate,
         method: iv.method,
         receiptNumber: iv.receiptNumber,
+        attachmentKey: iv.attachmentKey,
         notes: iv.number,
         createdAt: iv.createdAt as any,
-        contractId: null as number | null,
-        contractNumber: null as string | null,
+        contractId: iv.contractId,
+        contractNumber: iv.contractNumber,
         tenantName: iv.tenantName,
       })),
     ];

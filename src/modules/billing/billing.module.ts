@@ -3,7 +3,7 @@ import {
   BadRequestException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
+import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns } from "drizzle-orm";
 import { simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -64,16 +64,21 @@ class SimpleInvoicesController {
         ilike(simpleInvoicesTable.number, `%${q.search}%`),
         ilike(simpleInvoicesTable.tenantName, `%${q.search}%`),
         ilike(simpleInvoicesTable.receiptNumber, `%${q.search}%`),
+        ilike(contractsTable.contractNumber, `%${q.search}%`),
       ) as any);
     }
     const where = and(...conds);
     const statsWhere = type ? and(base, eq(simpleInvoicesTable.type, type as any)) : base;
 
     const [rows, totalRow, statsRows] = await Promise.all([
-      this.db.select().from(simpleInvoicesTable).where(where)
+      this.db.select({ ...getTableColumns(simpleInvoicesTable), contractNumber: contractsTable.contractNumber })
+        .from(simpleInvoicesTable)
+        .leftJoin(contractsTable, eq(simpleInvoicesTable.contractId, contractsTable.id))
+        .where(where)
         .orderBy((q.order === "asc" ? asc : desc)(simpleInvoicesTable.createdAt), desc(simpleInvoicesTable.id))
         .limit(q.pageSize).offset((q.page - 1) * q.pageSize),
-      this.db.select({ total: count() }).from(simpleInvoicesTable).where(where),
+      this.db.select({ total: count() }).from(simpleInvoicesTable)
+        .leftJoin(contractsTable, eq(simpleInvoicesTable.contractId, contractsTable.id)).where(where),
       this.db.select({ status: simpleInvoicesTable.status, cnt: count(), amount: sum(simpleInvoicesTable.total) })
         .from(simpleInvoicesTable).where(statsWhere).groupBy(simpleInvoicesTable.status),
     ]);
