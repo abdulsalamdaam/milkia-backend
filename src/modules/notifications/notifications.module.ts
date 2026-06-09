@@ -14,6 +14,7 @@ import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
+import { sendExpoPush } from "../../common/push";
 
 /* ─────────────── Tenant side — read ─────────────── */
 
@@ -124,7 +125,7 @@ export class NotificationsController {
 
     // The tenant must belong to this landlord's scope.
     const [tenant] = await this.db
-      .select({ id: tenantsTable.id })
+      .select({ id: tenantsTable.id, fcmToken: tenantsTable.fcmToken })
       .from(tenantsTable)
       .where(and(
         eq(tenantsTable.id, tenantId),
@@ -140,7 +141,17 @@ export class NotificationsController {
       body: text,
       type: body?.type?.toString().trim() || "custom",
     }).returning();
-    return row;
+
+    // Deliver an actual push to the tenant's device (fire-and-forget).
+    if (tenant.fcmToken) {
+      void sendExpoPush([{
+        to: tenant.fcmToken,
+        title,
+        body: text,
+        data: { type: row!.type, notificationId: row!.id },
+      }]);
+    }
+    return { ...row, pushed: !!tenant.fcmToken };
   }
 }
 

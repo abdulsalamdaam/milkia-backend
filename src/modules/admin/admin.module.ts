@@ -1,4 +1,5 @@
 import { BadRequestException, Body, Controller, Delete, ForbiddenException, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { sendExpoPush } from "../../common/push";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { usersTable, propertiesTable, unitsTable, contractsTable, paymentsTable, loginLogsTable, tenantsTable, rolesTable, companiesTable, ownersTable } from "@oqudk/database";
@@ -261,25 +262,17 @@ class AdminController {
     if (!tenant) throw new NotFoundException("Tenant not found");
     if (!tenant.fcmToken) throw new BadRequestException("لا يوجد رمز إشعارات لهذا المستأجر. يجب أن يسجّل دخوله على التطبيق أولاً ويوافق على الإشعارات.");
 
-    const payload = [{
+    const result = await sendExpoPush([{
       to: tenant.fcmToken,
-      sound: "default",
       title: body.title || "عقودك",
       body: body.body || `مرحباً ${tenant.name}، هذه رسالة تجريبية.`,
       data: body.data || { type: "test" },
-    }];
-
-    const res = await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: { "content-type": "application/json", "accept": "application/json", "accept-encoding": "gzip, deflate" },
-      body: JSON.stringify(payload),
-    });
-    const json = await res.json().catch(() => ({}));
+    }]);
 
     return {
-      success: res.ok,
+      success: result.ok,
       tenant: { id: tenant.id, name: tenant.name, platform: tenant.fcmPlatform },
-      expo: json,
+      expo: result.response,
     };
   }
 
