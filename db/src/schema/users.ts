@@ -55,6 +55,8 @@ export const usersTable = pgTable("users", {
   packagePlan: text("package_plan").notNull().default("broker"),
   /** Account holder type — "individual" | "company" (set at registration). */
   userType: text("user_type").notNull().default("individual"),
+  /** Set when the first-login setup wizard is completed (null = not yet). */
+  onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

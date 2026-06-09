@@ -8,7 +8,10 @@
  * `users.user_type` and only drives Settings visibility — it is NOT a plan.
  */
 
-export type PackagePlan = "basic" | "advanced" | "professional" | "enterprise";
+export type PackagePlan = "tenant" | "basic" | "advanced" | "professional" | "enterprise";
+
+/** Two product modes: the tenant self-tracker vs the full landlord portal. */
+export type PackageMode = "tenant" | "landlord";
 
 /** Sentinel for "unlimited" — large enough to never gate in practice. */
 export const UNLIMITED = 1_000_000;
@@ -17,6 +20,8 @@ export interface PackageDef {
   key: PackagePlan;
   labelAr: string;
   labelEn: string;
+  /** tenant = personal contract tracker; landlord = full portal. */
+  mode: PackageMode;
   /** Landlord (owner) records — unlimited on every plan. */
   maxLandlords: number;
   maxProperties: number;
@@ -26,10 +31,23 @@ export interface PackageDef {
 }
 
 export const PACKAGES: Record<PackagePlan, PackageDef> = {
+  // Tenant package — a self-managed personal tracker (1 unit, no team, no
+  // financials/reports/maintenance). The account holder IS the tenant.
+  tenant: {
+    key: "tenant",
+    labelAr: "المستأجرين",
+    labelEn: "Tenants",
+    mode: "tenant",
+    maxLandlords: 0,
+    maxProperties: 1,
+    maxUnits: 1,
+    maxUsers: 0,
+  },
   basic: {
     key: "basic",
     labelAr: "الأساسية",
     labelEn: "Basic",
+    mode: "landlord",
     maxLandlords: UNLIMITED,
     maxProperties: 10,
     maxUnits: 10,
@@ -39,6 +57,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     key: "advanced",
     labelAr: "المتقدمة",
     labelEn: "Advanced",
+    mode: "landlord",
     maxLandlords: UNLIMITED,
     maxProperties: 50,
     maxUnits: 50,
@@ -48,6 +67,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     key: "professional",
     labelAr: "الاحترافية",
     labelEn: "Professional",
+    mode: "landlord",
     maxLandlords: UNLIMITED,
     maxProperties: 200,
     maxUnits: 200,
@@ -57,6 +77,7 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     key: "enterprise",
     labelAr: "المؤسسات",
     labelEn: "Enterprise",
+    mode: "landlord",
     maxLandlords: UNLIMITED,
     maxProperties: UNLIMITED,
     maxUnits: UNLIMITED,
@@ -82,4 +103,9 @@ export function resolvePackage(plan: string | null | undefined): PackageDef {
 /** Whether a string is one of the current plan keys. */
 export function isPackagePlan(plan: string | null | undefined): plan is PackagePlan {
   return !!plan && plan in PACKAGES;
+}
+
+/** The product mode (tenant tracker vs landlord portal) for a plan. */
+export function packageMode(plan: string | null | undefined): PackageMode {
+  return resolvePackage(plan).mode;
 }
