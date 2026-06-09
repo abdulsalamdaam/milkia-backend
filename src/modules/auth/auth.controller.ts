@@ -80,12 +80,20 @@ export class AuthController {
     return this.auth.register(body);
   }
 
-  // Confirm an email-verification token (from the link in the email).
+  // Confirm an email-verification token (from the link in the email — legacy).
   @Post("verify-email")
   @HttpCode(200)
   @Throttle({ default: { limit: 20, ttl: 3600_000 } })
   verifyEmail(@Body() body: { token?: string }) {
     return this.auth.verifyEmail(body?.token ?? "");
+  }
+
+  // Confirm an email with the 6-digit OTP code (email + code).
+  @Post("verify-email-otp")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 3600_000 } })
+  verifyEmailOtp(@Body() body: { email?: string; code?: string }) {
+    return this.auth.verifyEmailWithOtp(body?.email ?? "", body?.code ?? "");
   }
 
   // Re-send a verification link (public; doesn't reveal account existence).

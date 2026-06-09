@@ -158,6 +158,41 @@ export class EmailService {
   }
 
   /**
+   * Email-verification via a 6-digit OTP code (replaces the verification
+   * link). The user types the code on the verify page to confirm ownership.
+   */
+  async sendVerifyOtp(to: string, name: string, code: string, ttlMinutes: number, isEmployee = false): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const safeCode = escapeHtml(code);
+    const intro = isEmployee
+      ? "تمت إضافتك كموظف. لتفعيل دخولك، أدخل رمز التأكيد التالي في صفحة التحقق."
+      : "شكراً لتسجيلك في عقودك. لتأكيد بريدك الإلكتروني، أدخل رمز التحقق التالي.";
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:22px;">مرحباً ${safeName} 👋</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        ${intro}<br/>
+        Enter the verification code below to confirm your email. Valid for ${ttlMinutes} minutes.
+      </p>
+      <div style="margin:24px 0;text-align:center;">
+        <div style="display:inline-block;font-family:'SFMono-Regular',Menlo,monospace;font-size:32px;letter-spacing:8px;font-weight:700;color:#0f172a;padding:14px 28px;background:#f1f5f9;border-radius:12px;border:1px solid #e2e8f0;">
+          ${safeCode}
+        </div>
+      </div>
+      <p style="margin:0 0 6px;color:#64748b;font-size:13px;">
+        رمز التأكيد صالح لمدة ${ttlMinutes} دقيقة. إذا لم تطلب هذا، تجاهل الرسالة.<br/>
+        If you didn't request this, you can ignore this email.
+      </p>
+    `);
+    return this.send({
+      to,
+      subject: `رمز تأكيد البريد · Oqudk verification code: ${code}`,
+      html,
+      text: `مرحباً ${name}، رمز تأكيد بريدك في عقودك: ${code} (صالح ${ttlMinutes} دقيقة).`,
+    });
+  }
+
+  /**
    * Welcome email for a freshly-added tenant: a friendly greeting plus a
    * nudge to download the mobile app. Sent only when the landlord opts in
    * (the "send welcome" checkbox) and the tenant has an email on file.

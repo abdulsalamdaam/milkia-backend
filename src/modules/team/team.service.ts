@@ -11,7 +11,7 @@ import { eq, and, asc, isNotNull, isNull } from "drizzle-orm";
 import { rolesTable, usersTable, type User } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { EmailService } from "../email/email.service";
-import { newEmailVerifyToken } from "../../common/email-verification";
+import { newEmailVerifyOtp, EMAIL_VERIFY_OTP_TTL_MIN } from "../../common/email-verification";
 import { resolvePackage, UNLIMITED } from "../../common/packages";
 import { employeeCount } from "../../common/quota";
 
@@ -129,8 +129,8 @@ export class TeamService {
       ? input.password
       : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
     const passwordHash = await bcrypt.hash(effectivePassword, 10);
-    // Employees must verify their email before they can log in.
-    const verify = newEmailVerifyToken();
+    // Employees must verify their email (via OTP code) before they can log in.
+    const otp = await newEmailVerifyOtp();
     const [created] = await this.db
       .insert(usersTable)
       .values({
@@ -145,15 +145,15 @@ export class TeamService {
         companyId: actor.companyId ?? null,
         roleId,
         emailVerified: false,
-        emailVerifyTokenHash: verify.tokenHash,
-        emailVerifyExpiresAt: verify.expiresAt,
+        emailVerifyTokenHash: otp.codeHash,
+        emailVerifyExpiresAt: otp.expiresAt,
       })
       .returning();
-    void this.email.sendVerifyEmail(created!.email, created!.name, verify.token, true);
+    void this.email.sendVerifyOtp(created!.email, created!.name, otp.code, EMAIL_VERIFY_OTP_TTL_MIN, true);
     return strip(created!);
   }
 
-  /** Re-send the email-verification link to an employee. */
+  /** Re-send the email-verification OTP code to an employee. */
   async resendEmployeeVerification(actorId: number, employeeId: number): Promise<{ success: boolean; alreadyVerified?: boolean }> {
     const [actor] = await this.db.select().from(usersTable).where(eq(usersTable.id, actorId));
     if (!actor) throw new NotFoundException("Actor not found");
@@ -161,11 +161,11 @@ export class TeamService {
     const [emp] = await this.db.select().from(usersTable).where(eq(usersTable.id, employeeId));
     if (!emp || emp.ownerUserId !== actorId || emp.deletedAt) throw new NotFoundException("Employee not found");
     if (emp.emailVerified) return { success: true, alreadyVerified: true };
-    const verify = newEmailVerifyToken();
+    const otp = await newEmailVerifyOtp();
     await this.db.update(usersTable)
-      .set({ emailVerifyTokenHash: verify.tokenHash, emailVerifyExpiresAt: verify.expiresAt })
+      .set({ emailVerifyTokenHash: otp.codeHash, emailVerifyExpiresAt: otp.expiresAt })
       .where(eq(usersTable.id, employeeId));
-    void this.email.sendVerifyEmail(emp.email, emp.name, verify.token, true);
+    void this.email.sendVerifyOtp(emp.email, emp.name, otp.code, EMAIL_VERIFY_OTP_TTL_MIN, true);
     return { success: true };
   }
 

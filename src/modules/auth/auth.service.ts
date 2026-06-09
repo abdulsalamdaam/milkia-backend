@@ -10,7 +10,7 @@ import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { TwilioVerifyService } from "../twilio/twilio-verify.service";
 import { EmailService } from "../email/email.service";
 import { ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
-import { newEmailVerifyToken, hashEmailVerifyToken } from "../../common/email-verification";
+import { hashEmailVerifyToken, newEmailVerifyOtp, verifyEmailOtpCode, EMAIL_VERIFY_OTP_TTL_MIN } from "../../common/email-verification";
 
 const MAX_FAILED = 5;
 /** Email-OTP code lifetime — drives the DB expiry, the email text, and the
@@ -371,9 +371,9 @@ export class AuthService {
       ? password
       : `otp-only-${Math.random().toString(36).slice(2)}-${Date.now()}`;
     const passwordHash = await bcrypt.hash(effectivePassword, 10);
-    // Email-verification token — the user must click the link before the
-    // admin approves. Stored as a sha256 hash with a 7-day expiry.
-    const verify = newEmailVerifyToken();
+    // Email-verification OTP — the user enters the 6-digit code before the
+    // admin approves. Only the bcrypt hash is stored, with a short expiry.
+    const otp = await newEmailVerifyOtp();
     const [user] = await this.db.insert(usersTable).values({
       email: email.toLowerCase(),
       passwordHash,
@@ -384,17 +384,40 @@ export class AuthService {
       roleId: userRoleRow?.id ?? null,
       userType,
       emailVerified: false,
-      emailVerifyTokenHash: verify.tokenHash,
-      emailVerifyExpiresAt: verify.expiresAt,
+      emailVerifyTokenHash: otp.codeHash,
+      emailVerifyExpiresAt: otp.expiresAt,
     }).returning();
 
-    void this.email.sendVerifyEmail(user!.email, user!.name, verify.token, false);
+    void this.email.sendVerifyOtp(user!.email, user!.name, otp.code, EMAIL_VERIFY_OTP_TTL_MIN, false);
 
     return {
       pending: true,
-      message: "تم استلام طلب التسجيل. أرسلنا رابط تأكيد إلى بريدك الإلكتروني — يرجى تأكيده، ثم سيقوم المشرف بمراجعة الحساب وتفعيله.",
+      message: "تم استلام طلب التسجيل. أرسلنا رمز تأكيد إلى بريدك الإلكتروني — أدخله لتأكيد بريدك، ثم سيقوم المشرف بمراجعة الحساب وتفعيله.",
       user: { id: user!.id, email: user!.email, name: user!.name, accountStatus: user!.accountStatus },
     };
+  }
+
+  /** Verify an email-verification OTP code (email + 6-digit code). */
+  async verifyEmailWithOtp(email: string, code: string) {
+    const e = (email || "").trim().toLowerCase();
+    const c = (code || "").trim();
+    if (!e || !c) throw new BadRequestException("البريد الإلكتروني والرمز مطلوبان");
+    const [user] = await this.db.select().from(usersTable)
+      .where(and(eq(usersTable.email, e), isNull(usersTable.deletedAt)));
+    if (!user) throw new BadRequestException({ error: "الرمز غير صحيح أو منتهي الصلاحية", code: "INVALID_CODE" });
+    if (user.emailVerified) {
+      return { success: true, alreadyVerified: true, message: "تم تأكيد بريدك الإلكتروني مسبقاً" };
+    }
+    if (!user.emailVerifyTokenHash || !user.emailVerifyExpiresAt
+        || new Date(user.emailVerifyExpiresAt).getTime() < Date.now()) {
+      throw new BadRequestException({ error: "انتهت صلاحية الرمز. اطلب رمزاً جديداً", code: "EXPIRED_CODE" });
+    }
+    const ok = await verifyEmailOtpCode(c, user.emailVerifyTokenHash);
+    if (!ok) throw new BadRequestException({ error: "الرمز غير صحيح", code: "INVALID_CODE" });
+    await this.db.update(usersTable)
+      .set({ emailVerified: true, emailVerifiedAt: new Date(), emailVerifyTokenHash: null, emailVerifyExpiresAt: null })
+      .where(eq(usersTable.id, user.id));
+    return { success: true, alreadyVerified: false, message: "تم تأكيد بريدك الإلكتروني بنجاح" };
   }
 
   /** Verify an email-verification token (from the link). */
@@ -426,11 +449,11 @@ export class AuthService {
     // Don't reveal whether the email exists.
     if (!user) return { success: true };
     if (user.emailVerified) return { success: true, alreadyVerified: true };
-    const verify = newEmailVerifyToken();
+    const otp = await newEmailVerifyOtp();
     await this.db.update(usersTable)
-      .set({ emailVerifyTokenHash: verify.tokenHash, emailVerifyExpiresAt: verify.expiresAt })
+      .set({ emailVerifyTokenHash: otp.codeHash, emailVerifyExpiresAt: otp.expiresAt })
       .where(eq(usersTable.id, user.id));
-    void this.email.sendVerifyEmail(user.email, user.name, verify.token, user.ownerUserId != null);
+    void this.email.sendVerifyOtp(user.email, user.name, otp.code, EMAIL_VERIFY_OTP_TTL_MIN, user.ownerUserId != null);
     return { success: true };
   }
 
