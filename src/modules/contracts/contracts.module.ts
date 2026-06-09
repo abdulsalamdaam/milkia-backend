@@ -437,8 +437,12 @@ class ContractsController {
   /**
    * End a contract. This does NOT delete it — the contract stays as a
    * historical record with status `terminated`. Its units are unlinked
-   * and freed (status `available`), and its still-unpaid installments are
-   * marked collected (paid). Already-paid installments are kept as-is.
+   * and freed (status `available`).
+   *
+   * NOTE: the installment/payment/invoice settlement on termination is
+   * intentionally DISABLED for now (commented below) — terminating a
+   * contract must not touch its installments/payments/invoices. Re-enable
+   * the block when the settlement behaviour is finalised.
    */
   @Delete(":contractId")
   @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
@@ -460,15 +464,16 @@ class ContractsController {
     }
     await this.db.delete(contractUnitsTable).where(eq(contractUnitsTable.contractId, id));
 
-    // Settle the contract's still-unpaid installments — mark them collected
-    // (paid) so they stay as paid history rather than being dropped.
-    await this.db.update(paymentsTable)
-      .set({ status: "paid", paidDate: now.toISOString().slice(0, 10) } as any)
-      .where(and(
-        eq(paymentsTable.contractId, id),
-        isNull(paymentsTable.deletedAt),
-        inArray(paymentsTable.status, ["pending", "overdue", "partially_paid"] as any),
-      ));
+    // DISABLED for now — termination must not affect installments/payments/
+    // invoices. Re-enable to settle still-unpaid installments as paid history.
+    // await this.db.update(paymentsTable)
+    //   .set({ status: "paid", paidDate: now.toISOString().slice(0, 10) } as any)
+    //   .where(and(
+    //     eq(paymentsTable.contractId, id),
+    //     isNull(paymentsTable.deletedAt),
+    //     inArray(paymentsTable.status, ["pending", "overdue", "partially_paid"] as any),
+    //   ));
+    void now;
     return { success: true, message: "تم إنهاء العقد" };
   }
 }
