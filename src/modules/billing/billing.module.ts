@@ -201,6 +201,7 @@ class SimpleInvoicesController {
             collectedDate: paidDate,
             method,
             receiptNumber: collectionReceipt,
+            attachmentKey: body?.attachmentKey ?? null,
             notes: body?.notes ?? `فاتورة ${doc.number}`,
           });
           const collectedAfter = round2(collectedBefore + amount);
@@ -220,6 +221,7 @@ class SimpleInvoicesController {
       paidDate: isInvoice ? paidDate : doc.paidDate,
       receiptNumber: voucherNumber,
       paymentMethod: isInvoice ? method : doc.paymentMethod,
+      attachmentKey: body?.attachmentKey ?? doc.attachmentKey,
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, scopeId(user)))).returning();
     return updated;
   }

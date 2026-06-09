@@ -33,6 +33,8 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   paidDate: date("paid_date"),
   // Payment method captured at the collection step (bank_transfer/cash/…).
   paymentMethod: text("payment_method"),
+  // Collection evidence (receipt/photo) attached when the invoice is confirmed.
+  attachmentKey: text("attachment_key"),
   // Receipt-voucher number, stamped when an invoice is confirmed.
   receiptNumber: text("receipt_number"),
   // For credit/debit notes — the original invoice number being adjusted.
