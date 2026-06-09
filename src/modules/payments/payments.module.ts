@@ -194,6 +194,58 @@ class PaymentsController {
   }
 
   /**
+   * All collections (money actually received) across the account — powers the
+   * Collections (التحصيل) tab. Paged, searchable by receipt/tenant/contract.
+   */
+  @Get("collections-all")
+  @RequirePermissions(PERMISSIONS.PAYMENTS_VIEW)
+  async listAllCollections(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
+    const q = listQuerySchema.parse(rawQuery ?? {});
+    const conds = [eq(paymentCollectionsTable.userId, scopeId(user))];
+    if (q.search) {
+      conds.push(or(
+        ilike(paymentCollectionsTable.receiptNumber, `%${q.search}%`),
+        ilike(contractsTable.tenantName, `%${q.search}%`),
+        ilike(contractsTable.contractNumber, `%${q.search}%`),
+      ) as any);
+    }
+    const where = and(...conds);
+    const rowsQ = this.db
+      .select({
+        id: paymentCollectionsTable.id,
+        paymentId: paymentCollectionsTable.paymentId,
+        amount: paymentCollectionsTable.amount,
+        collectedDate: paymentCollectionsTable.collectedDate,
+        method: paymentCollectionsTable.method,
+        receiptNumber: paymentCollectionsTable.receiptNumber,
+        notes: paymentCollectionsTable.notes,
+        createdAt: paymentCollectionsTable.createdAt,
+        contractId: paymentsTable.contractId,
+        contractNumber: contractsTable.contractNumber,
+        tenantName: contractsTable.tenantName,
+      })
+      .from(paymentCollectionsTable)
+      .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
+      .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
+      .where(where)
+      .orderBy((q.order === "asc" ? asc : desc)(paymentCollectionsTable.collectedDate), desc(paymentCollectionsTable.id))
+      .limit(q.pageSize).offset((q.page - 1) * q.pageSize);
+    const [rows, totalRow, totalAmt] = await Promise.all([
+      rowsQ,
+      this.db.select({ total: count() }).from(paymentCollectionsTable)
+        .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
+        .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id)).where(where),
+      this.db.select({ amount: sum(paymentCollectionsTable.amount) })
+        .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.userId, scopeId(user))),
+    ]);
+    const total = Number(totalRow[0]?.total ?? 0);
+    return {
+      data: rows, page: q.page, pageSize: q.pageSize, total,
+      stats: { totalCollected: round2(Number(totalAmt[0]?.amount ?? 0)), count: total },
+    };
+  }
+
+  /**
    * Record a collection against an installment. Supports partial amounts —
    * the installment becomes `partially_paid` until its collections cover the
    * full amount, then flips to `paid`.

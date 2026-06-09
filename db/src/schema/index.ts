@@ -25,3 +25,4 @@ export * from "./invoices";
 export * from "./invoiceLines";
 export * from "./lookups";
 export * from "./auditLogs";
+export * from "./simpleInvoices";

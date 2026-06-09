@@ -281,6 +281,13 @@
       "when": 1779140280000,
       "tag": "0039_user_email_verification",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1779140340000,
+      "tag": "0040_simple_invoices",
+      "breakpoints": true
     }
   ]
 }

@@ -18,6 +18,7 @@ import { UnitsModule } from "./modules/units/units.module";
 import { ContractsModule } from "./modules/contracts/contracts.module";
 import { ImportModule } from "./modules/import/import.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
+import { BillingModule } from "./modules/billing/billing.module";
 import { AdminModule } from "./modules/admin/admin.module";
 import { ProfileModule } from "./modules/profile/profile.module";
 import { OwnersModule } from "./modules/owners/owners.module";
@@ -63,6 +64,7 @@ import { AuditModule } from "./modules/audit/audit.module";
     ContractsModule,
     ImportModule,
     PaymentsModule,
+    BillingModule,
     PaymentConfirmationsModule,
     NotificationsModule,
     AdminModule,
