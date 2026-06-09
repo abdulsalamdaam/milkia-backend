@@ -15,6 +15,20 @@ export const VAT_RATE = 0.15;
 /** Round to 2 decimals without binary-float drift (e.g. 0.1 + 0.2). */
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+/**
+ * Add `n` months to `base`, anchored to the base day-of-month and clamped to
+ * the target month's length — UTC-based to match `new Date("YYYY-MM-DD")`.
+ * Plain `Date.setMonth(+n)` overflows (e.g. Jan 31 + 1 month → Mar 2), which
+ * drifts/skips months over a year; this keeps every period on the start day.
+ */
+export function addMonthsUTC(base: Date, n: number): Date {
+  const day = base.getUTCDate();
+  const d = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + n, 1));
+  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
+  return d;
+}
+
 export function buildInstallments(
   contractId: number,
   userId: number,
@@ -77,12 +91,14 @@ export function buildInstallments(
     if (Number.isFinite(y) && y > 0 && Number.isFinite(a) && a > 0) termMap.set(y, a);
   }
 
-  // Rent rows first (so prepaid can be applied to the earliest ones).
+  // Rent rows first (so prepaid can be applied to the earliest ones). Each
+  // period is anchored to the start day (clamped) to avoid month drift.
   const rentStart = rows.length;
-  const cursor = new Date(start);
+  let period = 0;
+  let cursor = addMonthsUTC(start, 0);
   while (cursor <= end) {
     // Contract-year index (0-based) → escalation / per-year overrides.
-    const monthsSince = (cursor.getFullYear() - start.getFullYear()) * 12 + (cursor.getMonth() - start.getMonth());
+    const monthsSince = period * stepMonths;
     const year = Math.max(0, Math.floor(monthsSince / 12));
     // An explicit per-year rate wins; otherwise the escalated base rent.
     const annualForYear = termMap.has(year + 1)
@@ -98,7 +114,8 @@ export function buildInstallments(
       description: null,
       isDemo: false,
     });
-    cursor.setMonth(cursor.getMonth() + stepMonths);
+    period++;
+    cursor = addMonthsUTC(start, period * stepMonths);
   }
 
   applyPrepaid(rows, rentStart, prepaidRent);
@@ -158,19 +175,15 @@ function appendFees(
       dates.push(fee.dueDate ? new Date(fee.dueDate) : new Date(start));
     } else if (fee.recurrence === "annual") {
       for (let y = 0; y < contractYears; y++) {
-        const d = new Date(start);
-        d.setFullYear(d.getFullYear() + y);
+        const d = addMonthsUTC(start, y * 12);
         if (d <= end) dates.push(d);
       }
     } else if (fee.recurrence === "semi_annual") {
-      let d = new Date(start);
-      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 6); }
+      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i * 6)) dates.push(d);
     } else if (fee.recurrence === "quarterly") {
-      let d = new Date(start);
-      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 3); }
+      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i * 3)) dates.push(d);
     } else {
-      let d = new Date(start);
-      while (d <= end) { dates.push(new Date(d)); d.setMonth(d.getMonth() + 1); }
+      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i)) dates.push(d);
     }
 
     for (const d of dates) {
