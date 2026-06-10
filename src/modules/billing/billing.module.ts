@@ -19,7 +19,7 @@ const DOC_STATUSES = ["draft", "confirmed", "cancelled"] as const;
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const today = () => new Date().toISOString().slice(0, 10);
 
-type LineItem = { description: string; quantity: number; unitPrice: number; amount: number };
+type LineItem = { description: string; quantity: number; unitPrice: number; amount: number; vat?: boolean };
 
 function normalizeItems(raw: any): LineItem[] {
   if (!Array.isArray(raw)) return [];
@@ -28,7 +28,9 @@ function normalizeItems(raw: any): LineItem[] {
       const quantity = round2(Number(it?.quantity ?? 1)) || 0;
       const unitPrice = round2(Number(it?.unitPrice ?? 0)) || 0;
       const amount = it?.amount != null ? round2(Number(it.amount)) : round2(quantity * unitPrice);
-      return { description: String(it?.description ?? "").trim(), quantity, unitPrice, amount };
+      // Per-line VAT flag — default true when omitted (legacy behaviour).
+      const vat = it?.vat == null ? true : !!it.vat;
+      return { description: String(it?.description ?? "").trim(), quantity, unitPrice, amount, vat };
     })
     .filter((it) => it.description || it.amount);
 }

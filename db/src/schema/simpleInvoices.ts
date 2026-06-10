@@ -26,7 +26,7 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   // Extra client contact details captured on the document itself.
   client: jsonb("client").$type<{ phone?: string; email?: string; address?: string; vatNumber?: string } | null>(),
   // Line items: [{ description, quantity, unitPrice, amount }].
-  items: jsonb("items").$type<Array<{ description: string; quantity: number; unitPrice: number; amount: number }>>(),
+  items: jsonb("items").$type<Array<{ description: string; quantity: number; unitPrice: number; amount: number; vat?: boolean }>>(),
   subtotal: numeric("subtotal", { precision: 14, scale: 2 }).notNull().default("0"),
   total: numeric("total", { precision: 14, scale: 2 }).notNull().default("0"),
   issueDate: date("issue_date"),
