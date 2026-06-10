@@ -57,9 +57,25 @@ export const usersTable = pgTable("users", {
   userType: text("user_type").notNull().default("individual"),
   /** Set when the first-login setup wizard is completed (null = not yet). */
   onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
-  /** Subscription window — set by the admin when assigning/approving a plan. */
+  /** Subscription window — set when a subscription payment is collected. */
   subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
   subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
+  /**
+   * Subscription lifecycle:
+   *   pending_payment → approved but not paid yet (must pay to activate)
+   *   active          → paid, within the subscription window
+   *   grace           → past due, within the 15-day grace period
+   *   locked          → grace expired; account restricted to settings/usage/pay
+   * `active` here is the *stored* status; the API also derives grace/locked
+   * from the dates so it stays correct without a cron job.
+   */
+  subscriptionStatus: text("subscription_status").notNull().default("pending_payment"),
+  /** Billing cycle the user is subscribed on — "monthly" | "yearly". */
+  billingCycle: text("billing_cycle").notNull().default("monthly"),
+  /** The plan the user picked on the landing page, shown to the admin before approval. */
+  desiredPackagePlan: text("desired_package_plan"),
+  /** The billing cycle the user picked on the landing page. */
+  desiredBillingCycle: text("desired_billing_cycle"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

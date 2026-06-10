@@ -7,8 +7,9 @@ import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { scopeId } from "../../common/scope";
-import { resolvePackage, packageMode } from "../../common/packages";
+import { resolvePackage, packageMode, planPrice, isPayablePlan, type BillingCycle } from "../../common/packages";
 import { packageUsage } from "../../common/quota";
+import { deriveSubscription } from "../../common/subscription";
 
 /** The caller's subscription package — its limits, mode and current usage. */
 @ApiTags("package")
@@ -25,6 +26,7 @@ class PackageController {
       .select({
         packagePlan: usersTable.packagePlan, userType: usersTable.userType, onboardedAt: usersTable.onboardedAt,
         subscriptionStartedAt: usersTable.subscriptionStartedAt, subscriptionEndsAt: usersTable.subscriptionEndsAt,
+        subscriptionStatus: usersTable.subscriptionStatus, billingCycle: usersTable.billingCycle,
       })
       .from(usersTable)
       .where(eq(usersTable.id, ownerId));
@@ -32,6 +34,10 @@ class PackageController {
     const usage = await packageUsage(this.db, ownerId);
     const endsAt = owner?.subscriptionEndsAt ?? null;
     const daysRemaining = endsAt ? Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000) : null;
+
+    const cycle = (owner?.billingCycle === "yearly" ? "yearly" : "monthly") as BillingCycle;
+    const sub = deriveSubscription({ storedStatus: owner?.subscriptionStatus, subscriptionEndsAt: endsAt });
+    const amountDue = planPrice(owner?.packagePlan, cycle);
     return {
       plan,
       mode: plan.mode,
@@ -42,6 +48,17 @@ class PackageController {
       subscriptionEndsAt: endsAt,
       daysRemaining,
       expired: daysRemaining != null && daysRemaining < 0,
+      // Subscription lifecycle (drives the pay/grace/locked alerts + gating).
+      subscription: {
+        status: sub.status,
+        needsPayment: sub.needsPayment,
+        locked: sub.locked,
+        graceUntil: sub.graceUntil,
+        daysUntilLock: sub.daysUntilLock,
+        billingCycle: cycle,
+        amountDue,
+        payable: isPayablePlan(owner?.packagePlan),
+      },
     };
   }
 

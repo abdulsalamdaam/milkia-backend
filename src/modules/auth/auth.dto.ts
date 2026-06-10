@@ -52,6 +52,15 @@ export class RegisterDto {
   @IsOptional()
   @IsIn(["individual", "company"])
   userType?: "individual" | "company";
+
+  /** Plan + cycle the user picked on the landing page (shown to the admin). */
+  @IsOptional()
+  @IsString()
+  desiredPackagePlan?: string;
+
+  @IsOptional()
+  @IsIn(["monthly", "yearly"])
+  desiredBillingCycle?: "monthly" | "yearly";
 }
 
 export class ForgotPasswordDto {

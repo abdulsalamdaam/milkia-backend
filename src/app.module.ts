@@ -36,6 +36,7 @@ import { LookupsModule } from "./modules/lookups/lookups.module";
 import { PaymentConfirmationsModule } from "./modules/payment-confirmations/payment-confirmations.module";
 import { NotificationsModule } from "./modules/notifications/notifications.module";
 import { PackageModule } from "./modules/package/package.module";
+import { SubscriptionModule } from "./modules/subscription/subscription.module";
 import { AuditModule } from "./modules/audit/audit.module";
 
 @Module({
@@ -82,6 +83,7 @@ import { AuditModule } from "./modules/audit/audit.module";
     CompaniesModule,
     LookupsModule,
     PackageModule,
+    SubscriptionModule,
     AuditModule,
   ],
   providers: [

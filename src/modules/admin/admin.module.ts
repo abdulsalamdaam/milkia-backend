@@ -348,6 +348,9 @@ class AdminController {
         isActive: usersTable.isActive,
         createdAt: usersTable.createdAt,
         packagePlan: usersTable.packagePlan,
+        desiredPackagePlan: usersTable.desiredPackagePlan,
+        desiredBillingCycle: usersTable.desiredBillingCycle,
+        subscriptionStatus: usersTable.subscriptionStatus,
         emailVerified: usersTable.emailVerified,
         emailVerifiedAt: usersTable.emailVerifiedAt,
         roleKey: rolesTable.key,
@@ -368,6 +371,10 @@ class AdminController {
       role: u.roleKey,
       accountStatus: u.accountStatus,
       isActive: u.isActive,
+      packagePlan: u.packagePlan,
+      desiredPackagePlan: u.desiredPackagePlan,
+      desiredBillingCycle: u.desiredBillingCycle,
+      subscriptionStatus: u.subscriptionStatus,
       emailVerified: u.emailVerified,
       emailVerifiedAt: u.emailVerifiedAt,
       createdAt: u.createdAt,
@@ -405,18 +412,35 @@ class AdminController {
   }
 
   @Patch("registrations/:id/approve")
-  async approve(@Param("id") id: string, @Body() body: { packagePlan?: string; subscriptionEndsAt?: string } | undefined) {
+  async approve(@Param("id") id: string, @Body() body: { packagePlan?: string; subscriptionEndsAt?: string; grantWithoutPayment?: boolean } | undefined) {
     const uid = parseInt(id, 10);
-    const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan : "basic";
-    const win = subscriptionWindow(body?.subscriptionEndsAt);
+    const [existing] = await this.db.select({ desiredPlan: usersTable.desiredPackagePlan, desiredCycle: usersTable.desiredBillingCycle })
+      .from(usersTable).where(eq(usersTable.id, uid));
+    // Plan precedence: admin override → the plan the user picked on the
+    // landing → basic.
+    const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan
+      : isPackagePlan(existing?.desiredPlan) ? existing!.desiredPlan!
+      : "basic";
+    const cycle = existing?.desiredCycle === "yearly" ? "yearly" : "monthly";
+
+    // Default flow: approve the account but require payment to activate the
+    // subscription (status = pending_payment, no active window yet). The admin
+    // can grant a free window by passing subscriptionEndsAt / grantWithoutPayment.
+    const manualGrant = !!body?.subscriptionEndsAt || !!body?.grantWithoutPayment;
+    const win = manualGrant ? subscriptionWindow(body?.subscriptionEndsAt) : null;
     const [user] = await this.db.update(usersTable)
-      .set({ accountStatus: "active", isActive: true, packagePlan: plan, subscriptionStartedAt: win.startedAt, subscriptionEndsAt: win.endsAt })
+      .set({
+        accountStatus: "active", isActive: true, packagePlan: plan, billingCycle: cycle,
+        subscriptionStatus: manualGrant ? "active" : "pending_payment",
+        subscriptionStartedAt: manualGrant ? win!.startedAt : null,
+        subscriptionEndsAt: manualGrant ? win!.endsAt : null,
+      })
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
     // Fire-and-forget the approval notice — must not block the API response.
     void this.email.sendRegistrationApproved(user.email, user.name);
-    return { success: true, id: user.id, accountStatus: user.accountStatus, packagePlan: plan };
+    return { success: true, id: user.id, accountStatus: user.accountStatus, packagePlan: plan, subscriptionStatus: user.subscriptionStatus };
   }
 
   /** Change a user's subscription package (and renew the window) at any time. */

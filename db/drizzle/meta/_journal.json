@@ -337,6 +337,13 @@
       "when": 1779140760000,
       "tag": "0047_subscription_dates",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1779140820000,
+      "tag": "0048_subscription_billing",
+      "breakpoints": true
     }
   ]
 }

@@ -26,3 +26,4 @@ export * from "./invoiceLines";
 export * from "./lookups";
 export * from "./auditLogs";
 export * from "./simpleInvoices";
+export * from "./subscriptionPayments";

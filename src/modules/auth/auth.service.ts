@@ -10,6 +10,7 @@ import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { TwilioVerifyService } from "../twilio/twilio-verify.service";
 import { EmailService } from "../email/email.service";
 import { ROLE_PRESETS, ALL_PERMISSIONS } from "../../common/permissions";
+import { isPackagePlan } from "../../common/packages";
 import { hashEmailVerifyToken, newEmailVerifyOtp, verifyEmailOtpCode, EMAIL_VERIFY_OTP_TTL_MIN } from "../../common/email-verification";
 
 const MAX_FAILED = 5;
@@ -350,9 +351,13 @@ export class AuthService {
    * row stays well-formed. If/when password login is re-enabled, users can
    * set a real password via a future "set password" flow.
    */
-  async register(input: { email: string; password?: string; name: string; phone?: string; company?: string; userType?: "individual" | "company" }) {
+  async register(input: { email: string; password?: string; name: string; phone?: string; company?: string; userType?: "individual" | "company"; desiredPackagePlan?: string; desiredBillingCycle?: string }) {
     const { email, password, name, phone } = input;
     const userType = input.userType === "company" ? "company" : "individual";
+    // The plan/cycle the user picked on the landing page — shown to the admin
+    // before approval so they assign the package the user actually wants.
+    const desiredPackagePlan = isPackagePlan(input.desiredPackagePlan) ? input.desiredPackagePlan : null;
+    const desiredBillingCycle = input.desiredBillingCycle === "yearly" ? "yearly" : input.desiredBillingCycle === "monthly" ? "monthly" : null;
     if (!email || !name) throw new BadRequestException("الاسم والبريد الإلكتروني مطلوبة");
 
     const existing = await this.db.select().from(usersTable).where(and(eq(usersTable.email, email.toLowerCase()), isNull(usersTable.deletedAt)));
@@ -383,6 +388,8 @@ export class AuthService {
       phone: phone ?? null,
       roleId: userRoleRow?.id ?? null,
       userType,
+      desiredPackagePlan,
+      desiredBillingCycle,
       emailVerified: false,
       emailVerifyTokenHash: otp.codeHash,
       emailVerifyExpiresAt: otp.expiresAt,

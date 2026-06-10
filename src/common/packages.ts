@@ -114,3 +114,32 @@ export function isPackagePlan(plan: string | null | undefined): plan is PackageP
 export function packageMode(plan: string | null | undefined): PackageMode {
   return resolvePackage(plan).mode;
 }
+
+/* ── Subscription pricing (SAR) ────────────────────────────────────────────
+ * Mirrors the landing: a monthly base price, and a yearly price that applies a
+ * 15% discount (round(monthly × 0.85) × 12). Enterprise is sold on request
+ * (no online payment). Used to bill the Moyasar subscription invoice. */
+
+export type BillingCycle = "monthly" | "yearly";
+export const YEARLY_DISCOUNT = 0.15;
+
+/** Monthly base price per plan, in SAR. `null` = priced on request. */
+export const PLAN_MONTHLY_PRICE: Record<PackagePlan, number | null> = {
+  tenant: 50,
+  basic: 250,
+  advanced: 250,
+  professional: 350,
+  enterprise: null,
+};
+
+/** Amount charged (SAR) for a plan on the given cycle, or null if on-request. */
+export function planPrice(plan: string | null | undefined, cycle: BillingCycle): number | null {
+  const monthly = PLAN_MONTHLY_PRICE[resolvePackage(plan).key];
+  if (monthly == null) return null;
+  return cycle === "yearly" ? Math.round(monthly * (1 - YEARLY_DISCOUNT)) * 12 : monthly;
+}
+
+/** Whether a plan can be paid for online (Enterprise is contact-sales only). */
+export function isPayablePlan(plan: string | null | undefined): boolean {
+  return PLAN_MONTHLY_PRICE[resolvePackage(plan).key] != null;
+}
