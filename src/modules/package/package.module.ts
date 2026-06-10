@@ -22,17 +22,26 @@ class PackageController {
   async myPackage(@CurrentUser() user: AuthUser) {
     const ownerId = scopeId(user);
     const [owner] = await this.db
-      .select({ packagePlan: usersTable.packagePlan, userType: usersTable.userType, onboardedAt: usersTable.onboardedAt })
+      .select({
+        packagePlan: usersTable.packagePlan, userType: usersTable.userType, onboardedAt: usersTable.onboardedAt,
+        subscriptionStartedAt: usersTable.subscriptionStartedAt, subscriptionEndsAt: usersTable.subscriptionEndsAt,
+      })
       .from(usersTable)
       .where(eq(usersTable.id, ownerId));
     const plan = resolvePackage(owner?.packagePlan);
     const usage = await packageUsage(this.db, ownerId);
+    const endsAt = owner?.subscriptionEndsAt ?? null;
+    const daysRemaining = endsAt ? Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000) : null;
     return {
       plan,
       mode: plan.mode,
       usage,
       userType: owner?.userType ?? "individual",
       onboarded: owner?.onboardedAt != null,
+      subscriptionStartedAt: owner?.subscriptionStartedAt ?? null,
+      subscriptionEndsAt: endsAt,
+      daysRemaining,
+      expired: daysRemaining != null && daysRemaining < 0,
     };
   }
 

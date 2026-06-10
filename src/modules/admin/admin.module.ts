@@ -14,6 +14,19 @@ import { EmailService } from "../email/email.service";
 import { isPackagePlan } from "../../common/packages";
 import { newEmailVerifyToken } from "../../common/email-verification";
 
+/** Subscription window: starts now; ends at the given date or +1 year. */
+function subscriptionWindow(endsAtIso?: string): { startedAt: Date; endsAt: Date } {
+  const startedAt = new Date();
+  let endsAt: Date;
+  if (endsAtIso) {
+    const d = new Date(endsAtIso);
+    endsAt = isNaN(d.getTime()) ? new Date(new Date().setFullYear(startedAt.getFullYear() + 1)) : d;
+  } else {
+    endsAt = new Date(new Date().setFullYear(startedAt.getFullYear() + 1));
+  }
+  return { startedAt, endsAt };
+}
+
 @ApiTags("admin")
 @ApiBearerAuth("user-jwt")
 @Controller("admin")
@@ -392,11 +405,12 @@ class AdminController {
   }
 
   @Patch("registrations/:id/approve")
-  async approve(@Param("id") id: string, @Body() body: { packagePlan?: string } | undefined) {
+  async approve(@Param("id") id: string, @Body() body: { packagePlan?: string; subscriptionEndsAt?: string } | undefined) {
     const uid = parseInt(id, 10);
     const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan : "basic";
+    const win = subscriptionWindow(body?.subscriptionEndsAt);
     const [user] = await this.db.update(usersTable)
-      .set({ accountStatus: "active", isActive: true, packagePlan: plan })
+      .set({ accountStatus: "active", isActive: true, packagePlan: plan, subscriptionStartedAt: win.startedAt, subscriptionEndsAt: win.endsAt })
       .where(eq(usersTable.id, uid))
       .returning();
     if (!user) throw new NotFoundException("User not found");
@@ -405,17 +419,18 @@ class AdminController {
     return { success: true, id: user.id, accountStatus: user.accountStatus, packagePlan: plan };
   }
 
-  /** Change a user's subscription package at any time. */
+  /** Change a user's subscription package (and renew the window) at any time. */
   @Patch("users/:userId/package")
-  async changePackage(@Param("userId") userId: string, @Body() body: { packagePlan?: string }) {
+  async changePackage(@Param("userId") userId: string, @Body() body: { packagePlan?: string; subscriptionEndsAt?: string }) {
     const id = parseInt(userId, 10);
     const plan = isPackagePlan(body?.packagePlan) ? body!.packagePlan : "basic";
+    const win = subscriptionWindow(body?.subscriptionEndsAt);
     const [user] = await this.db.update(usersTable)
-      .set({ packagePlan: plan })
+      .set({ packagePlan: plan, subscriptionStartedAt: win.startedAt, subscriptionEndsAt: win.endsAt })
       .where(eq(usersTable.id, id))
       .returning();
     if (!user) throw new NotFoundException("User not found");
-    return { success: true, id: user.id, packagePlan: plan };
+    return { success: true, id: user.id, packagePlan: plan, subscriptionEndsAt: win.endsAt };
   }
 
   /** Re-send the email-verification link to a pending registrant. */

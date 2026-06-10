@@ -57,6 +57,9 @@ export const usersTable = pgTable("users", {
   userType: text("user_type").notNull().default("individual"),
   /** Set when the first-login setup wizard is completed (null = not yet). */
   onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
+  /** Subscription window — set by the admin when assigning/approving a plan. */
+  subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
+  subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
