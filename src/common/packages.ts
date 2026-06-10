@@ -41,7 +41,8 @@ export const PACKAGES: Record<PackagePlan, PackageDef> = {
     labelAr: "المستأجرين",
     labelEn: "Tenants",
     mode: "tenant",
-    maxLandlords: 0,
+    // A tenant adds the landlord(s) they rent from — don't gate that.
+    maxLandlords: UNLIMITED,
     maxProperties: 50,
     maxUnits: 50,
     maxUsers: 1,
