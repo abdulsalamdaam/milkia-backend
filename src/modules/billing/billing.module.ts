@@ -55,10 +55,17 @@ class SimpleInvoicesController {
     const q = listQuerySchema.parse(rawQuery ?? {});
     const type = DOC_TYPES.includes(rawQuery?.type) ? rawQuery.type : undefined;
     const status = DOC_STATUSES.includes(rawQuery?.status) ? rawQuery.status : undefined;
+    // Optional landlord/property/unit filter — resolved to contract ids by the
+    // frontend and passed through here.
+    const contractIds: number[] | undefined =
+      typeof rawQuery?.contractIds === "string" && rawQuery.contractIds.trim()
+        ? rawQuery.contractIds.split(",").map((x: string) => parseInt(x, 10)).filter((n: number) => Number.isFinite(n))
+        : undefined;
     const base = and(eq(simpleInvoicesTable.userId, scopeId(user)), isNull(simpleInvoicesTable.deletedAt));
     const conds = [base];
     if (type) conds.push(eq(simpleInvoicesTable.type, type as any));
     if (status) conds.push(eq(simpleInvoicesTable.status, status as any));
+    if (contractIds && contractIds.length > 0) conds.push(inArray(simpleInvoicesTable.contractId, contractIds) as any);
     if (q.search) {
       conds.push(or(
         ilike(simpleInvoicesTable.number, `%${q.search}%`),
@@ -68,7 +75,10 @@ class SimpleInvoicesController {
       ) as any);
     }
     const where = and(...conds);
-    const statsWhere = type ? and(base, eq(simpleInvoicesTable.type, type as any)) : base;
+    const statsConds: any[] = [base];
+    if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
+    if (contractIds && contractIds.length > 0) statsConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
+    const statsWhere = and(...statsConds);
 
     const [rows, totalRow, statsRows] = await Promise.all([
       this.db.select({ ...getTableColumns(simpleInvoicesTable), contractNumber: contractsTable.contractNumber })

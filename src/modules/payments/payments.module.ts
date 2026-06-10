@@ -74,6 +74,7 @@ class PaymentsController {
         tenantName: contractsTable.tenantName,
         tenantShortName: tenantsTable.shortName,
         vatEnabled: contractsTable.vatEnabled,
+        additionalFees: contractsTable.additionalFees,
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
@@ -116,22 +117,35 @@ class PaymentsController {
       : [];
     const collMap = new Map((collAgg as Array<{ paymentId: number; total: string | null }>).map((c) => [c.paymentId, Number(c.total ?? 0)]));
 
-    const data = rows.map((r) => ({
-      id: r.id,
-      contractId: r.contractId,
-      amount: r.amount,
-      collectedAmount: round2(collMap.get(r.id) ?? 0),
-      dueDate: r.dueDate,
-      paidDate: r.paidDate,
-      status: r.status,
-      receiptNumber: r.receiptNumber,
-      attachmentKey: r.attachmentKey,
-      description: r.description,
-      notes: r.notes,
-      createdAt: r.createdAt,
-      vatEnabled: !!(r as any).vatEnabled,
-      contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName, tenantShortName: r.tenantShortName, vatEnabled: !!(r as any).vatEnabled } : null,
-    }));
+    const data = rows.map((r) => {
+      // VAT is per-row, not contract-wide. A fee installment (one with a
+      // description matching an additional fee) only carries VAT when that
+      // fee's own `vat` flag was enabled; rent rows follow the contract flag.
+      const contractVat = !!(r as any).vatEnabled;
+      let rowVat = contractVat;
+      const desc = (r as any).description as string | null;
+      if (desc) {
+        const fees = ((r as any).additionalFees || []) as Array<{ name?: string; vat?: boolean }>;
+        const fee = Array.isArray(fees) ? fees.find((f) => f?.name === desc) : undefined;
+        rowVat = fee ? !!fee.vat : false; // a fee row with no matching fee def has no VAT
+      }
+      return {
+        id: r.id,
+        contractId: r.contractId,
+        amount: r.amount,
+        collectedAmount: round2(collMap.get(r.id) ?? 0),
+        dueDate: r.dueDate,
+        paidDate: r.paidDate,
+        status: r.status,
+        receiptNumber: r.receiptNumber,
+        attachmentKey: r.attachmentKey,
+        description: r.description,
+        notes: r.notes,
+        createdAt: r.createdAt,
+        vatEnabled: rowVat,
+        contract: r.contractNumber ? { contractNumber: r.contractNumber, tenantName: r.tenantName, tenantShortName: r.tenantShortName, vatEnabled: contractVat } : null,
+      };
+    });
     if (!usePaginated) return data;
 
     const stats = { paid: 0, pending: 0, overdue: 0, cancelled: 0, partiallyPaid: 0,
@@ -205,11 +219,18 @@ class PaymentsController {
     const q = listQuerySchema.parse(rawQuery ?? {});
     const uid = scopeId(user);
     const s = q.search ? `%${q.search}%` : null;
+    // Optional landlord/property/unit filter — resolved to contract ids by the
+    // frontend and passed through here.
+    const contractIds: number[] | undefined =
+      typeof rawQuery?.contractIds === "string" && rawQuery.contractIds.trim()
+        ? rawQuery.contractIds.split(",").map((x: string) => parseInt(x, 10)).filter((n: number) => Number.isFinite(n))
+        : undefined;
 
     // 1. Real collections (money received against installments — this also
     //    covers invoices that were linked to an installment).
     const collConds: any[] = [eq(paymentCollectionsTable.userId, uid)];
     if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s), ilike(simpleInvoicesTable.number, s)));
+    if (contractIds && contractIds.length > 0) collConds.push(inArray(paymentsTable.contractId, contractIds));
     const collections = await this.db
       .select({
         id: paymentCollectionsTable.id,
@@ -244,6 +265,7 @@ class PaymentsController {
       isNull(simpleInvoicesTable.deletedAt),
     ];
     if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s), ilike(contractsTable.contractNumber, s)));
+    if (contractIds && contractIds.length > 0) invConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
     const freeInvoices = await this.db
       .select({
         id: simpleInvoicesTable.id,

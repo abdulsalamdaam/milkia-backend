@@ -444,9 +444,18 @@ class ContractsController {
    * contract must not touch its installments/payments/invoices. Re-enable
    * the block when the settlement behaviour is finalised.
    */
+  /**
+   * End a contract. The `mode` query param decides what happens to the still-
+   * unpaid installments:
+   *   - "paid"      → settle them all as paid (closes the contract as fully
+   *                   collected — "consider all installments as paid").
+   *   - "cancelled" → mark every not-paid installment as cancelled.
+   *   - undefined   → leave installments untouched (legacy behaviour).
+   * The contract is marked "terminated" and its units freed either way.
+   */
   @Delete(":contractId")
   @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
-  async remove(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string) {
+  async remove(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string, @Query("mode") mode?: string) {
     const id = parseInt(contractId, 10);
     const now = new Date();
     const [contract] = await this.db.update(contractsTable)
@@ -464,17 +473,24 @@ class ContractsController {
     }
     await this.db.delete(contractUnitsTable).where(eq(contractUnitsTable.contractId, id));
 
-    // DISABLED for now — termination must not affect installments/payments/
-    // invoices. Re-enable to settle still-unpaid installments as paid history.
-    // await this.db.update(paymentsTable)
-    //   .set({ status: "paid", paidDate: now.toISOString().slice(0, 10) } as any)
-    //   .where(and(
-    //     eq(paymentsTable.contractId, id),
-    //     isNull(paymentsTable.deletedAt),
-    //     inArray(paymentsTable.status, ["pending", "overdue", "partially_paid"] as any),
-    //   ));
-    void now;
-    return { success: true, message: "تم إنهاء العقد" };
+    // Settle the still-unpaid installments per the chosen mode. Only rows that
+    // aren't already fully paid (pending/overdue/partially_paid) are affected.
+    const unsettled = ["pending", "overdue", "partially_paid"] as any;
+    if (mode === "paid") {
+      await this.db.update(paymentsTable)
+        .set({ status: "paid", paidDate: now.toISOString().slice(0, 10) } as any)
+        .where(and(eq(paymentsTable.contractId, id), isNull(paymentsTable.deletedAt), inArray(paymentsTable.status, unsettled)));
+    } else if (mode === "cancelled") {
+      await this.db.update(paymentsTable)
+        .set({ status: "cancelled" } as any)
+        .where(and(eq(paymentsTable.contractId, id), isNull(paymentsTable.deletedAt), inArray(paymentsTable.status, unsettled)));
+    }
+    return {
+      success: true,
+      message: mode === "paid" ? "تم إنهاء العقد واعتبار جميع الأقساط مدفوعة"
+        : mode === "cancelled" ? "تم إنهاء العقد وإلغاء الأقساط غير المدفوعة"
+        : "تم إنهاء العقد",
+    };
   }
 }
 
