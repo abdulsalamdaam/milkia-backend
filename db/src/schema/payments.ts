@@ -20,6 +20,9 @@ export const paymentsTable = pgTable("payments", {
   attachmentKey: text("attachment_key"),
   description: text("description"),
   notes: text("notes"),
+  // Whether THIS installment carries 15% VAT (rent rows follow the contract
+  // flag; fee rows follow the fee's own vat flag). VAT is baked into `amount`.
+  vatEnabled: boolean("vat_enabled").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

@@ -73,8 +73,8 @@ class PaymentsController {
         contractNumber: contractsTable.contractNumber,
         tenantName: contractsTable.tenantName,
         tenantShortName: tenantsTable.shortName,
-        vatEnabled: contractsTable.vatEnabled,
-        additionalFees: contractsTable.additionalFees,
+        vatEnabled: paymentsTable.vatEnabled,
+        contractVatEnabled: contractsTable.vatEnabled,
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
@@ -118,17 +118,10 @@ class PaymentsController {
     const collMap = new Map((collAgg as Array<{ paymentId: number; total: string | null }>).map((c) => [c.paymentId, Number(c.total ?? 0)]));
 
     const data = rows.map((r) => {
-      // VAT is per-row, not contract-wide. A fee installment (one with a
-      // description matching an additional fee) only carries VAT when that
-      // fee's own `vat` flag was enabled; rent rows follow the contract flag.
-      const contractVat = !!(r as any).vatEnabled;
-      let rowVat = contractVat;
-      const desc = (r as any).description as string | null;
-      if (desc) {
-        const fees = ((r as any).additionalFees || []) as Array<{ name?: string; vat?: boolean }>;
-        const fee = Array.isArray(fees) ? fees.find((f) => f?.name === desc) : undefined;
-        rowVat = fee ? !!fee.vat : false; // a fee row with no matching fee def has no VAT
-      }
+      // VAT is per-installment (set at generation): rent rows follow the
+      // contract flag, fee rows follow their own fee's vat flag.
+      const rowVat = !!(r as any).vatEnabled;
+      const contractVat = !!(r as any).contractVatEnabled;
       return {
         id: r.id,
         contractId: r.contractId,

@@ -9,7 +9,7 @@ export type FeeEntry = {
 export type RentTerm = { year: number; amount: number };
 /** One hand-built rent installment for a custom payment schedule. */
 export type CustomScheduleEntry = { dueDate: string; amount: number | string };
-export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending"; description: string | null; isDemo: boolean };
+export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending"; description: string | null; vatEnabled: boolean; isDemo: boolean };
 
 export const VAT_RATE = 0.15;
 /** Round to 2 decimals without binary-float drift (e.g. 0.1 + 0.2). */
@@ -66,6 +66,7 @@ export function buildInstallments(
         dueDate: new Date(e.dueDate).toISOString().split("T")[0]!,
         status: "pending",
         description: null,
+        vatEnabled,
         isDemo: false,
       });
     }
@@ -112,6 +113,7 @@ export function buildInstallments(
       dueDate: cursor.toISOString().split("T")[0]!,
       status: "pending",
       description: null,
+      vatEnabled,
       isDemo: false,
     });
     period++;
@@ -159,7 +161,8 @@ function appendFees(
           amount: round2(amt * feeVat).toFixed(2),
           dueDate: new Date(e.dueDate).toISOString().split("T")[0]!,
           status: "pending",
-          description: fee.name,
+          description: fee.name || "رسوم",
+          vatEnabled: !!fee.vat,
           isDemo: false,
         });
       }
@@ -192,7 +195,8 @@ function appendFees(
         amount: round2(feeAmt).toFixed(2),
         dueDate: d.toISOString().split("T")[0]!,
         status: "pending",
-        description: fee.name,
+        description: fee.name || "رسوم",
+        vatEnabled: !!fee.vat,
         isDemo: false,
       });
     }
