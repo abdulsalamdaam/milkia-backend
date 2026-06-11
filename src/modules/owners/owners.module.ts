@@ -146,9 +146,12 @@ class OwnersController {
     const [target] = await this.db.select({ isDefault: ownersTable.isDefault }).from(ownersTable)
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
     if (!target) throw new NotFoundException("Landlord not found");
-    // The default landlord represents the account holder — it can't be deleted.
-    if (target.isDefault) {
-      throw new BadRequestException("لا يمكن حذف حساب المؤجر الافتراضي (حسابك). يمكنك تعيين مؤجر افتراضي آخر أولاً.");
+    // The default landlord (and the sole landlord) represent the account
+    // holder — they can't be deleted.
+    const [{ cnt }] = await this.db.select({ cnt: count() }).from(ownersTable)
+      .where(and(eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
+    if (target.isDefault || Number(cnt) <= 1) {
+      throw new BadRequestException("لا يمكن حذف حساب المؤجر الذي يمثّل حسابك. يمكنك تعيين مؤجر افتراضي آخر أو إضافة مؤجر آخر أولاً.");
     }
     await this.db.update(ownersTable).set({ deletedAt: new Date() } as any)
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
