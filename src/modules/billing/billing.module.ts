@@ -323,9 +323,12 @@ class SimpleInvoicesController {
       toCollect = round2(toCollect - amt);
     }
 
+    // Only mark the invoice fully collected when the entered amount covers the
+    // whole total; a partial collection keeps it confirmed (collectible again).
+    const collectedNow = body?.amount != null ? round2(Number(body.amount)) : round2(Number(doc.total));
+    const fullyCollected = collectedNow >= round2(Number(doc.total)) - 0.01;
     const [updated] = await this.db.update(simpleInvoicesTable).set({
-      paidDate,
-      receiptNumber: voucher,
+      ...(fullyCollected ? { paidDate, receiptNumber: voucher } : {}),
       paymentMethod: method,
       attachmentKey: body?.attachmentKey ?? doc.attachmentKey,
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
