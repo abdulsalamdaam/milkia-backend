@@ -57,6 +57,14 @@ export const PERMISSIONS = {
   INVOICES_DELETE: "invoices.delete",
   ZATCA_ONBOARD:              "zatca.onboard",
   ZATCA_PROMOTE_PRODUCTION:   "zatca.promote-production",
+
+  // Expenses — finance sub-module (managed/approved by Accountant + GM).
+  EXPENSES_VIEW:    "expenses.view",
+  EXPENSES_WRITE:   "expenses.write",
+  EXPENSES_APPROVE: "expenses.approve",
+
+  // Subscription/billing management (General Manager).
+  SUBSCRIPTION_MANAGE: "subscription.manage",
 } as const;
 
 export type Permission = typeof PERMISSIONS[keyof typeof PERMISSIONS];
@@ -87,6 +95,8 @@ const FULL_TENANT_ADMIN: Permission[] = [
   PERMISSIONS.SUPPORT_VIEW,
   PERMISSIONS.INVOICES_VIEW, PERMISSIONS.INVOICES_WRITE, PERMISSIONS.INVOICES_DELETE,
   PERMISSIONS.ZATCA_ONBOARD, PERMISSIONS.ZATCA_PROMOTE_PRODUCTION,
+  PERMISSIONS.EXPENSES_VIEW, PERMISSIONS.EXPENSES_WRITE, PERMISSIONS.EXPENSES_APPROVE,
+  PERMISSIONS.SUBSCRIPTION_MANAGE,
 ];
 
 /**
@@ -123,61 +133,97 @@ export function hasPermission(perms: string[] | undefined | null, key: Permissio
  * into user.permissions JSONB. Owners can then trim/extend per individual.
  */
 export const EMPLOYEE_PRESETS: Record<string, { labelAr: string; labelEn: string; permissions: Permission[] }> = {
+  // 1) المدير العام — highest authority: everything the owner can do.
   general: {
-    labelAr: "مدير عام",
+    labelAr: "المدير العام",
     labelEn: "General Manager",
-    permissions: FULL_TENANT_ADMIN,
+    permissions: [...FULL_TENANT_ADMIN, PERMISSIONS.SUPPORT_RESPOND, PERMISSIONS.CAMPAIGNS_VIEW, PERMISSIONS.CAMPAIGNS_WRITE],
   },
+  // 2) مدير العقارات — daily operations across properties; no finance writes,
+  //    no system settings / user management.
+  propertyManager: {
+    labelAr: "مدير العقارات",
+    labelEn: "Property Manager",
+    permissions: [
+      PERMISSIONS.DEEDS_VIEW, PERMISSIONS.DEEDS_WRITE,
+      PERMISSIONS.PROPERTIES_VIEW, PERMISSIONS.PROPERTIES_WRITE,
+      PERMISSIONS.UNITS_VIEW, PERMISSIONS.UNITS_WRITE,
+      PERMISSIONS.OWNERS_VIEW, PERMISSIONS.OWNERS_WRITE,
+      PERMISSIONS.TENANTS_VIEW, PERMISSIONS.TENANTS_WRITE,
+      PERMISSIONS.CONTRACTS_VIEW, PERMISSIONS.CONTRACTS_WRITE,
+      PERMISSIONS.MAINTENANCE_VIEW, PERMISSIONS.MAINTENANCE_WRITE,
+      PERMISSIONS.PAYMENTS_VIEW,
+      PERMISSIONS.REPORTS_VIEW,
+    ],
+  },
+  // 3) مسؤول العقود — contracts only: create/edit drafts, attachments, add
+  //    owners/tenants, renew. No financial reports, no payments.
+  leasingOfficer: {
+    labelAr: "مسؤول العقود",
+    labelEn: "Leasing Officer",
+    permissions: [
+      PERMISSIONS.CONTRACTS_VIEW, PERMISSIONS.CONTRACTS_WRITE,
+      PERMISSIONS.OWNERS_VIEW, PERMISSIONS.OWNERS_WRITE,
+      PERMISSIONS.TENANTS_VIEW, PERMISSIONS.TENANTS_WRITE,
+      PERMISSIONS.DEEDS_VIEW, PERMISSIONS.DEEDS_WRITE,
+      PERMISSIONS.PROPERTIES_VIEW,
+      PERMISSIONS.UNITS_VIEW,
+    ],
+  },
+  // 4) مسؤول التحصيل — collections, invoices (view), installments, overdue,
+  //    reminders, payment plans. No contracts/properties writes; can't approve
+  //    notes (no invoices.write).
+  collectionOfficer: {
+    labelAr: "مسؤول التحصيل",
+    labelEn: "Collection Officer",
+    permissions: [
+      PERMISSIONS.PAYMENTS_VIEW, PERMISSIONS.PAYMENTS_WRITE,
+      PERMISSIONS.INVOICES_VIEW,
+      PERMISSIONS.CONTRACTS_VIEW,
+      PERMISSIONS.TENANTS_VIEW,
+      PERMISSIONS.REPORTS_VIEW,
+    ],
+  },
+  // 5) المحاسب — finance: installments, invoices, payments, receipts, taxes,
+  //    expenses + approvals; no property or user management.
   accountant: {
-    labelAr: "محاسب",
+    labelAr: "المحاسب",
     labelEn: "Accountant",
     permissions: [
       PERMISSIONS.PAYMENTS_VIEW, PERMISSIONS.PAYMENTS_WRITE,
-      PERMISSIONS.CONTRACTS_VIEW,
-      PERMISSIONS.TENANTS_VIEW,
-      PERMISSIONS.OWNERS_VIEW,
-      PERMISSIONS.PROPERTIES_VIEW,
-      PERMISSIONS.UNITS_VIEW,
-      PERMISSIONS.REPORTS_VIEW,
-      PERMISSIONS.INVOICES_VIEW, PERMISSIONS.INVOICES_WRITE,
+      PERMISSIONS.INVOICES_VIEW, PERMISSIONS.INVOICES_WRITE, PERMISSIONS.INVOICES_DELETE,
+      PERMISSIONS.EXPENSES_VIEW, PERMISSIONS.EXPENSES_WRITE, PERMISSIONS.EXPENSES_APPROVE,
       PERMISSIONS.ZATCA_ONBOARD,
-    ],
-  },
-  propertyManager: {
-    labelAr: "مدير عقار",
-    labelEn: "Property Manager",
-    permissions: [
-      PERMISSIONS.PROPERTIES_VIEW, PERMISSIONS.PROPERTIES_WRITE,
-      PERMISSIONS.UNITS_VIEW, PERMISSIONS.UNITS_WRITE,
-      PERMISSIONS.CONTRACTS_VIEW, PERMISSIONS.CONTRACTS_WRITE,
-      PERMISSIONS.TENANTS_VIEW, PERMISSIONS.TENANTS_WRITE,
-      PERMISSIONS.MAINTENANCE_VIEW, PERMISSIONS.MAINTENANCE_WRITE,
-      PERMISSIONS.PAYMENTS_VIEW,
-      PERMISSIONS.OWNERS_VIEW,
-      PERMISSIONS.REPORTS_VIEW,
-    ],
-  },
-  collector: {
-    labelAr: "محصّل",
-    labelEn: "Collector",
-    permissions: [
-      PERMISSIONS.PAYMENTS_VIEW, PERMISSIONS.PAYMENTS_WRITE,
-      PERMISSIONS.TENANTS_VIEW,
       PERMISSIONS.CONTRACTS_VIEW,
-    ],
-  },
-  assistant: {
-    labelAr: "مساعد",
-    labelEn: "Assistant",
-    permissions: [
+      PERMISSIONS.TENANTS_VIEW,
+      PERMISSIONS.OWNERS_VIEW,
       PERMISSIONS.PROPERTIES_VIEW,
       PERMISSIONS.UNITS_VIEW,
-      PERMISSIONS.CONTRACTS_VIEW,
-      PERMISSIONS.TENANTS_VIEW,
-      PERMISSIONS.OWNERS_VIEW,
-      PERMISSIONS.PAYMENTS_VIEW,
-      PERMISSIONS.MAINTENANCE_VIEW,
       PERMISSIONS.REPORTS_VIEW,
+    ],
+  },
+  // 6) مسؤول الصيانة — maintenance, suppliers/technicians (facilities),
+  //    scheduling + maintenance reports. No finance, no contracts.
+  maintenanceManager: {
+    labelAr: "مسؤول الصيانة",
+    labelEn: "Maintenance Manager",
+    permissions: [
+      PERMISSIONS.MAINTENANCE_VIEW, PERMISSIONS.MAINTENANCE_WRITE, PERMISSIONS.MAINTENANCE_DELETE,
+      PERMISSIONS.FACILITIES_VIEW, PERMISSIONS.FACILITIES_WRITE,
+      PERMISSIONS.PROPERTIES_VIEW,
+      PERMISSIONS.UNITS_VIEW,
+      PERMISSIONS.REPORTS_VIEW,
+    ],
+  },
+  // 7) موظف خدمة العملاء — tenants, tickets, support, notifications. No
+  //    finance, no contracts.
+  customerService: {
+    labelAr: "موظف خدمة العملاء",
+    labelEn: "Customer Service",
+    permissions: [
+      PERMISSIONS.TENANTS_VIEW, PERMISSIONS.TENANTS_WRITE,
+      PERMISSIONS.SUPPORT_VIEW, PERMISSIONS.SUPPORT_RESPOND,
+      PERMISSIONS.MAINTENANCE_VIEW,
     ],
   },
 };

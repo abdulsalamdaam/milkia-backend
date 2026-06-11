@@ -282,7 +282,7 @@ export class TeamService {
 
   /** Returns the seeded employee-preset roles for the team UI dropdown. */
   async rolePresets() {
-    const employeePresetKeys = ["general", "accountant", "propertyManager", "collector", "assistant"];
+    const employeePresetKeys = ["general", "propertyManager", "leasingOfficer", "collectionOfficer", "accountant", "maintenanceManager", "customerService"];
     const rows = await this.db
       .select({
         id: rolesTable.key,
