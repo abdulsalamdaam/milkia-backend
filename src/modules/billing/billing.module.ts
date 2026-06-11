@@ -100,7 +100,16 @@ class SimpleInvoicesController {
       else if (s.status === "confirmed") { stats.confirmedCount = Number(s.cnt); stats.confirmedAmount = round2(Number(s.amount ?? 0)); }
     }
     const total = Number(totalRow[0]?.total ?? 0);
-    return { data: rows, page: q.page, pageSize: q.pageSize, total, stats };
+    // Per-invoice collected amount (sum of collections recorded against it).
+    const ids = (rows as Array<{ id: number }>).map((r) => r.id);
+    const collAgg = ids.length
+      ? await this.db.select({ invoiceId: paymentCollectionsTable.invoiceId, total: sum(paymentCollectionsTable.amount) })
+          .from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.invoiceId, ids))
+          .groupBy(paymentCollectionsTable.invoiceId)
+      : [];
+    const collMap = new Map((collAgg as Array<{ invoiceId: number | null; total: string | null }>).map((c) => [c.invoiceId, Number(c.total ?? 0)]));
+    const data = (rows as any[]).map((r) => ({ ...r, collectedAmount: round2(collMap.get(r.id) ?? 0) }));
+    return { data, page: q.page, pageSize: q.pageSize, total, stats };
   }
 
   @Get(":id")
@@ -109,7 +118,9 @@ class SimpleInvoicesController {
     const [doc] = await this.db.select().from(simpleInvoicesTable)
       .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, scopeId(user)), isNull(simpleInvoicesTable.deletedAt)));
     if (!doc) throw new NotFoundException("Document not found");
-    return doc;
+    const [agg] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+      .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, doc.id));
+    return { ...doc, collectedAmount: round2(Number(agg?.total ?? 0)) };
   }
 
   @Post()
@@ -287,7 +298,14 @@ class SimpleInvoicesController {
     const method = body?.method ?? "bank_transfer";
     const receipt = (body?.receiptNumber && String(body.receiptNumber).trim()) || voucher;
     const ids = (doc.paymentIds && doc.paymentIds.length) ? doc.paymentIds : (doc.paymentId ? [doc.paymentId] : []);
-    let toCollect = body?.amount != null ? round2(Number(body.amount)) : round2(Number(doc.total));
+    // Cap at what's still uncollected on this invoice (supports partial).
+    const [priorAgg] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+      .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, doc.id));
+    const alreadyCollected = round2(Number(priorAgg?.total ?? 0));
+    const invoiceRemaining = round2(round2(Number(doc.total)) - alreadyCollected);
+    if (invoiceRemaining <= 0.01) throw new BadRequestException("تم تحصيل هذه الفاتورة بالكامل");
+    let toCollect = body?.amount != null ? round2(Number(body.amount)) : invoiceRemaining;
+    if (toCollect > invoiceRemaining + 0.01) throw new BadRequestException(`مبلغ التحصيل يتجاوز المتبقي (${invoiceRemaining.toFixed(2)})`);
 
     for (const pid of ids) {
       if (toCollect <= 0.01) break;
@@ -323,10 +341,10 @@ class SimpleInvoicesController {
       toCollect = round2(toCollect - amt);
     }
 
-    // Only mark the invoice fully collected when the entered amount covers the
-    // whole total; a partial collection keeps it confirmed (collectible again).
-    const collectedNow = body?.amount != null ? round2(Number(body.amount)) : round2(Number(doc.total));
-    const fullyCollected = collectedNow >= round2(Number(doc.total)) - 0.01;
+    // Only mark the invoice fully collected when prior + this collection cover
+    // the total; a partial collection keeps it confirmed (collectible again).
+    const collectedNow = body?.amount != null ? round2(Number(body.amount)) : invoiceRemaining;
+    const fullyCollected = round2(alreadyCollected + collectedNow) >= round2(Number(doc.total)) - 0.01;
     const [updated] = await this.db.update(simpleInvoicesTable).set({
       ...(fullyCollected ? { paidDate, receiptNumber: voucher } : {}),
       paymentMethod: method,
