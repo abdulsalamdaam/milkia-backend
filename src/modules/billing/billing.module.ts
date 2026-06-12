@@ -187,6 +187,50 @@ class SimpleInvoicesController {
     return doc;
   }
 
+  /**
+   * Create a standalone receipt voucher (سند قبض) — a confirmed + collected
+   * invoice issued directly (money already received), optionally linked to a
+   * contract. Produces an RV number immediately.
+   */
+  @Post("receipt-voucher")
+  @RequirePermissions(PERMISSIONS.INVOICES_WRITE)
+  async createReceiptVoucher(@CurrentUser() user: AuthUser, @Body() body: any) {
+    const uid = scopeId(user);
+    const amount = round2(Number(body?.amount));
+    if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("المبلغ غير صالح");
+    const paidDate = body?.paidDate || today();
+    const method = body?.method || "bank_transfer";
+
+    // Optional contract link — snapshot its number/tenant.
+    let contractId: number | null = body?.contractId ?? null;
+    let tenantName: string | null = body?.tenantName ?? null;
+    let tenantId: number | null = body?.tenantId ?? null;
+    if (contractId) {
+      const [c] = await this.db.select({ id: contractsTable.id, tenantName: contractsTable.tenantName, tenantId: contractsTable.tenantId })
+        .from(contractsTable).where(and(eq(contractsTable.id, contractId), eq(contractsTable.userId, uid)));
+      if (!c) { contractId = null; } else { tenantName = tenantName || c.tenantName; tenantId = tenantId ?? c.tenantId; }
+    }
+
+    const items = Array.isArray(body?.items) && body.items.length
+      ? normalizeItems(body.items)
+      : [{ description: String(body?.description || "سند قبض").trim(), quantity: 1, unitPrice: amount, amount, vat: false }];
+    const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
+    const number = await this.nextNumber(uid, "invoice");
+    const [{ c: rvCount }] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
+    const voucher = `RV-${String(Number(rvCount ?? 0) + 1).padStart(6, "0")}`;
+
+    const [doc] = await this.db.insert(simpleInvoicesTable).values({
+      userId: uid, number, type: "invoice", status: "confirmed",
+      contractId: contractId ?? null, tenantId: tenantId ?? null, tenantName: tenantName ?? null,
+      client: body?.client ?? null, items,
+      subtotal: subtotal.toFixed(2), total: amount.toFixed(2),
+      issueDate: paidDate, paidDate, confirmedAt: new Date(),
+      receiptNumber: voucher, paymentMethod: method, notes: body?.notes ?? null,
+    } as any).returning();
+    return doc;
+  }
+
   @Patch(":id")
   @RequirePermissions(PERMISSIONS.INVOICES_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {

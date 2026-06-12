@@ -21,6 +21,7 @@ const USER_PROFILE_FIELDS = {
   phone: usersTable.phone,
   companyId: usersTable.companyId,
   roleId: usersTable.roleId,
+  ownerUserId: usersTable.ownerUserId,
   createdAt: usersTable.createdAt,
 } as const;
 
@@ -49,7 +50,21 @@ class ProfileController {
     const role = u.roleId
       ? (await this.db.select().from(rolesTable).where(eq(rolesTable.id, u.roleId)))[0] ?? null
       : null;
-    return { ...u, company, role };
+    // Employees (ownerUserId set) are linked to an owner/company account —
+    // surface that account's name so the UI can show "linked to …".
+    let linkedOwner: { id: number; name: string; companyName: string | null } | null = null;
+    if (u.ownerUserId) {
+      const [owner] = await this.db
+        .select({ id: usersTable.id, name: usersTable.name, companyId: usersTable.companyId })
+        .from(usersTable).where(eq(usersTable.id, u.ownerUserId));
+      if (owner) {
+        const companyName = owner.companyId
+          ? (await this.db.select({ name: companiesTable.name }).from(companiesTable).where(eq(companiesTable.id, owner.companyId)))[0]?.name ?? null
+          : null;
+        linkedOwner = { id: owner.id, name: owner.name, companyName };
+      }
+    }
+    return { ...u, company, role, linkedOwner };
   }
 
   @Patch()
