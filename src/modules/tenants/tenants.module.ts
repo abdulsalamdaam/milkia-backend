@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
-import { tenantsTable } from "@oqudk/database";
+import { tenantsTable, contractsTable, simpleInvoicesTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -138,6 +138,16 @@ class TenantsController {
     const [tenant] = await this.db.update(tenantsTable).set(updateData)
       .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, scopeId(user)), isNull(tenantsTable.deletedAt))).returning();
     if (!tenant) throw new NotFoundException("غير موجود");
+
+    // Propagate a renamed tenant to the snapshots stored on contracts and
+    // invoices so the new name shows everywhere (installments/collections join
+    // the contract, so they update too).
+    if (body.name !== undefined && tenant.name !== prior.name) {
+      await this.db.update(contractsTable).set({ tenantName: tenant.name })
+        .where(and(eq(contractsTable.tenantId, tid), eq(contractsTable.userId, scopeId(user))));
+      await this.db.update(simpleInvoicesTable).set({ tenantName: tenant.name })
+        .where(and(eq(simpleInvoicesTable.tenantId, tid), eq(simpleInvoicesTable.userId, scopeId(user))));
+    }
 
     // Fire-and-forget welcome email on the draft → finalized transition.
     if (body.sendWelcomeEmail && prior.isDraft && !tenant.isDraft && tenant.email) {

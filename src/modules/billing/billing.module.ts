@@ -231,7 +231,11 @@ class SimpleInvoicesController {
     const isNote = doc.type === "credit" || doc.type === "debit";
     if (isNote) {
       const sign = doc.type === "credit" ? -1 : 1;
-      const voucher = `${doc.type === "credit" ? "CN" : "DN"}-${String(doc.id).padStart(6, "0")}`;
+      // Per-account sequential note voucher (CN-000001 / DN-000001).
+      const notePrefix = doc.type === "credit" ? "CN" : "DN";
+      const [nCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+        .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, `${notePrefix}-%`)));
+      const voucher = `${notePrefix}-${String(Number(nCount?.c ?? 0) + 1).padStart(6, "0")}`;
       if (doc.billingReference) {
         const [refInv] = await this.db.select().from(simpleInvoicesTable)
           .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "invoice"),
@@ -294,7 +298,11 @@ class SimpleInvoicesController {
     if (doc.paidDate || doc.receiptNumber) throw new BadRequestException("تم تحصيل هذه الفاتورة مسبقاً");
 
     const paidDate = body?.paidDate || today();
-    const voucher = `RV-${String(doc.id).padStart(6, "0")}`;
+    // Per-account sequential receipt-voucher number (RV-000001…) — count the
+    // vouchers already issued for this account, not the global invoice id.
+    const [rvCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
+    const voucher = `RV-${String(Number(rvCount?.c ?? 0) + 1).padStart(6, "0")}`;
     const method = body?.method ?? "bank_transfer";
     const receipt = (body?.receiptNumber && String(body.receiptNumber).trim()) || voucher;
     const ids = (doc.paymentIds && doc.paymentIds.length) ? doc.paymentIds : (doc.paymentId ? [doc.paymentId] : []);

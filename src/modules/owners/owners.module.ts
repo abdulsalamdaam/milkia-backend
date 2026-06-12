@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, ne, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
-import { ownersTable } from "@oqudk/database";
+import { ownersTable, contractsTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -123,6 +123,8 @@ class OwnersController {
   @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("ownerId") ownerId: string, @Body() body: any) {
     const id = parseInt(ownerId, 10);
+    const [prior] = await this.db.select({ name: ownersTable.name }).from(ownersTable)
+      .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
     if (body.nationality !== undefined) updateData.nationalityLookupId = body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality);
@@ -136,6 +138,14 @@ class OwnersController {
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)))
       .returning();
     if (!owner) throw new NotFoundException("Owner not found");
+
+    // Propagate a renamed landlord to the contract snapshots. Contracts have no
+    // direct landlord FK (the name is captured from the property's owner at
+    // creation), so we match the previous name within the account.
+    if (body.name !== undefined && prior?.name && owner.name !== prior.name) {
+      await this.db.update(contractsTable).set({ landlordName: owner.name })
+        .where(and(eq(contractsTable.landlordName, prior.name), eq(contractsTable.userId, scopeId(user))));
+    }
     return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
   }
 

@@ -12,7 +12,9 @@ export const contractsTable = pgTable("contracts", {
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   // A contract's units live in the `contract_units` join table — a contract
   // can span many units. Rent below is one combined figure for all of them.
-  contractNumber: text("contract_number").notNull().unique(),
+  // Per-account sequential (EQ-000001…); uniqueness is composite on
+  // (user_id, contract_number) — see migration 0051.
+  contractNumber: text("contract_number").notNull(),
   // tenant — FK link to the registered tenant (one tenant → many contracts).
   // The tenant* text fields below are kept as a denormalised snapshot of the
   // renter's details at signing time.

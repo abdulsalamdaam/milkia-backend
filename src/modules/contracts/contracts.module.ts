@@ -256,7 +256,11 @@ class ContractsController {
 
     const freq = body.paymentFrequency || "monthly";
     const ownerId = scopeId(user);
-    const contractNumber = `EQ-${Date.now()}-${ownerId}`;
+    // Per-account sequential contract number (EQ-000001, EQ-000002 …). Each
+    // account has its own counter (unique is composite on user_id + number).
+    const [cCount] = await this.db.select({ c: count() }).from(contractsTable)
+      .where(eq(contractsTable.userId, ownerId));
+    const contractNumber = `EQ-${String(Number(cCount?.c ?? 0) + 1).padStart(6, "0")}`;
 
     const additionalFees: FeeEntry[] | null = body.additionalFees && Array.isArray(body.additionalFees) && body.additionalFees.length > 0 ? body.additionalFees : null;
     // Custom payment schedule — only kept when the cycle is "custom".
