@@ -46,7 +46,10 @@ export const contractsTable = pgTable("contracts", {
   // Deposit (الوديعة) lifecycle — 'pending' | 'collected' | 'returned'.
   depositStatus: text("deposit_status"),
   depositDueDate: date("deposit_due_date"),
-  // Rent paid up-front; counted as already paid against the rent total.
+  // Payment method captured when the deposit / advance rent was collected.
+  depositMethod: text("deposit_method"),
+  prepaidMethod: text("prepaid_method"),
+  // Rent paid up-front; recorded as a collection on the first installment(s).
   prepaidRent: numeric("prepaid_rent", { precision: 14, scale: 2 }).notNull().default("0"),
   // VAT (15%) applied to each rent installment, and annual rent escalation
   // (تصاعد الإيجار) compounded once per contract year.

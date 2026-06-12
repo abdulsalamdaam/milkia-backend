@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, inArray } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable, tenantsTable } from "@oqudk/database";
+import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable, paymentCollectionsTable, tenantsTable } from "@oqudk/database";
 
 /** Parse + sanitise the per-year rent overrides sent by the client. */
 function parseRentTerms(raw: any): { year: number; amount: number }[] {
@@ -28,7 +28,7 @@ const CONTRACT_FIELDS = [
   "repName", "repIdNumber", "companyUnified", "companyOrgType",
   "signingDate", "signingPlace", "ejarContractNumber",
   "startDate", "endDate", "monthlyRent", "paymentFrequency", "depositAmount",
-  "depositStatus", "depositDueDate", "prepaidRent",
+  "depositStatus", "depositDueDate", "depositMethod", "prepaidRent", "prepaidMethod",
   "vatEnabled", "escalationRate", "escalationType",
   "agencyFee", "firstPaymentAmount", "additionalFees", "customSchedule",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
@@ -189,7 +189,9 @@ class ContractsController {
         depositAmount: contractsTable.depositAmount,
         depositStatus: contractsTable.depositStatus,
         depositDueDate: contractsTable.depositDueDate,
+        depositMethod: contractsTable.depositMethod,
         prepaidRent: contractsTable.prepaidRent,
+        prepaidMethod: contractsTable.prepaidMethod,
         vatEnabled: contractsTable.vatEnabled,
         escalationRate: contractsTable.escalationRate,
         escalationType: contractsTable.escalationType,
@@ -299,7 +301,9 @@ class ContractsController {
       depositAmount: body.depositAmount ? String(body.depositAmount) : null,
       depositStatus: body.depositStatus ?? null,
       depositDueDate: body.depositDueDate ?? null,
+      depositMethod: body.depositMethod ?? null,
       prepaidRent: body.prepaidRent != null ? String(body.prepaidRent) : "0",
+      prepaidMethod: body.prepaidMethod ?? null,
       vatEnabled: Boolean(body.vatEnabled ?? false),
       escalationType: body.escalationType === "amount" ? "amount" : "percent",
       escalationRate: body.escalationRate != null ? String(body.escalationRate) : "0",
@@ -344,15 +348,62 @@ class ContractsController {
 
     await this.db.update(unitsTable).set({ status: "rented" }).where(inArray(unitsTable.id, unitIds));
 
+    // Build installments at their FULL amount (prepaid is NOT deducted — it's
+    // recorded as a collection below so each installment shows its full value
+    // with the remaining).
     const rows = buildInstallments(
       contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
       Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
       body.escalationType === "amount" ? "amount" : "percent",
-      rentTerms, Number(body.prepaidRent) || 0, customSchedule,
+      rentTerms, 0, customSchedule,
     );
-    if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
+    const inserted = rows.length > 0 ? await this.db.insert(paymentsTable).values(rows).returning() : [];
 
-    return { ...contract, unitIds, installmentsCreated: rows.length };
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const nowStr = new Date().toISOString().slice(0, 10);
+    const startDay = body.startDate || nowStr;
+
+    // Advance/prepaid rent → record as a collection on the earliest rent
+    // installments (keeps full amount; flips them to paid / partially_paid).
+    const prepaid = round2(Number(body.prepaidRent) || 0);
+    if (prepaid > 0 && inserted.length > 0) {
+      const method = body.prepaidMethod || "bank_transfer";
+      const rentRows = inserted.filter((p) => !p.description)
+        .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
+      let left = prepaid;
+      for (const p of rentRows) {
+        if (left <= 0.01) break;
+        const full = round2(Number(p.amount));
+        const amt = round2(Math.min(left, full));
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: p.id, userId: ownerId, amount: amt.toFixed(2),
+          collectedDate: startDay, method, notes: "إيجار مدفوع مقدماً",
+        } as any);
+        const fully = amt >= full - 0.01;
+        await this.db.update(paymentsTable)
+          .set({ status: fully ? "paid" : "partially_paid", paidDate: fully ? startDay : null })
+          .where(eq(paymentsTable.id, p.id));
+        left = round2(left - amt);
+      }
+    }
+
+    // Collected deposit → record a paid "deposit" row + collection so it shows
+    // in collections (with its method) as a held balance for the tenant.
+    const depositAmt = round2(Number(body.depositAmount) || 0);
+    if (depositAmt > 0 && body.depositStatus === "collected") {
+      const depDate = body.depositDueDate || startDay;
+      const [depRow] = await this.db.insert(paymentsTable).values({
+        contractId: contract!.id, userId: ownerId, amount: depositAmt.toFixed(2),
+        dueDate: depDate, status: "paid", paidDate: depDate,
+        description: "تأمين (وديعة)", vatEnabled: false, isDemo: false,
+      } as any).returning();
+      await this.db.insert(paymentCollectionsTable).values({
+        paymentId: depRow!.id, userId: ownerId, amount: depositAmt.toFixed(2),
+        collectedDate: depDate, method: body.depositMethod || "bank_transfer", notes: "تأمين (وديعة)",
+      } as any);
+    }
+
+    return { ...contract, unitIds, installmentsCreated: inserted.length };
   }
 
   @Post(":contractId/generate-installments")
@@ -394,7 +445,7 @@ class ContractsController {
       (contract.additionalFees as FeeEntry[] | null) ?? null,
       Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
       (contract as any).escalationType || "percent",
-      rentTerms, Number((contract as any).prepaidRent) || 0,
+      rentTerms, 0, // prepaid is tracked as a collection, not a deduction
       ((contract as any).customSchedule as { dueDate: string; amount: string }[] | null) ?? null,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
