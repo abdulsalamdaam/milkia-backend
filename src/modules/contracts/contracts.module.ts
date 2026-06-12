@@ -549,6 +549,167 @@ class ContractsController {
         : "تم إنهاء العقد",
     };
   }
+
+  /**
+   * Group every amount already collected on a contract into three buckets so
+   * the cancellation dialog can ask the landlord what to do with each:
+   *   - deposit      → collections on the "تأمين (وديعة)" payment row.
+   *   - advance      → collections marked "إيجار مدفوع مقدماً" (prepaid rent).
+   *   - installments → any other collected rent / fees.
+   * Sums are NET (negative refund rows reduce a bucket), so an already-settled
+   * bucket reads 0.
+   */
+  private async collectedBuckets(contractId: number) {
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const pays = await this.db.select({ id: paymentsTable.id, description: paymentsTable.description })
+      .from(paymentsTable)
+      .where(and(eq(paymentsTable.contractId, contractId), isNull(paymentsTable.deletedAt)));
+    const depIds = new Set(pays.filter((p) => p.description === "تأمين (وديعة)").map((p) => p.id));
+    const payIds = pays.map((p) => p.id);
+    const cols = payIds.length
+      ? await this.db.select().from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.paymentId, payIds))
+      : [];
+    const mk = () => ({ total: 0, rows: [] as { paymentId: number; amount: number }[] });
+    const deposit = mk(), advance = mk(), installments = mk();
+    for (const c of cols) {
+      const amt = Number(c.amount);
+      const b = depIds.has(c.paymentId) ? deposit : c.notes === "إيجار مدفوع مقدماً" ? advance : installments;
+      b.total = round2(b.total + amt);
+      b.rows.push({ paymentId: c.paymentId, amount: amt });
+    }
+    return { deposit, advance, installments };
+  }
+
+  /** Next per-account disbursement-voucher (سند صرف) number: RFND-0001, … */
+  private async nextRefundNumber(ownerId: number): Promise<string> {
+    const rows = await this.db.select({ rn: paymentCollectionsTable.receiptNumber })
+      .from(paymentCollectionsTable)
+      .where(and(eq(paymentCollectionsTable.userId, ownerId), ilike(paymentCollectionsTable.receiptNumber, "RFND-%")));
+    let max = 0;
+    for (const r of rows) {
+      const m = /RFND-(\d+)/.exec(r.rn || "");
+      if (m) max = Math.max(max, parseInt(m[1], 10));
+    }
+    return `RFND-${String(max + 1).padStart(4, "0")}`;
+  }
+
+  /** Settlement preview — the collected buckets the cancel dialog asks about. */
+  @Get(":contractId/settlement")
+  @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
+  async settlement(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string) {
+    const id = parseInt(contractId, 10);
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const [contract] = await this.db.select({ id: contractsTable.id }).from(contractsTable)
+      .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt)));
+    if (!contract) throw new NotFoundException("Contract not found");
+    const b = await this.collectedBuckets(id);
+    return {
+      deposit: round2(b.deposit.total),
+      advance: round2(b.advance.total),
+      installments: round2(b.installments.total),
+      total: round2(b.deposit.total + b.advance.total + b.installments.total),
+    };
+  }
+
+  /**
+   * Terminate a contract AND settle the money already collected. `mode`
+   * handles the still-unpaid installments (paid | cancelled), exactly like the
+   * legacy DELETE. The `deposit` / `advance` / `installments` fields decide each
+   * collected bucket: "refund" issues a disbursement voucher (a negative
+   * collection that nets Total Collected down) and recomputes the affected
+   * installments; "keep" / "forfeit" leave the cash with the landlord.
+   */
+  @Post(":contractId/terminate")
+  @RequirePermissions(PERMISSIONS.CONTRACTS_DELETE)
+  async terminate(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string, @Body() body: any) {
+    const id = parseInt(contractId, 10);
+    const ownerId = scopeId(user);
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const today = new Date().toISOString().slice(0, 10);
+    const mode = body?.mode as string | undefined;
+
+    const [contract] = await this.db.update(contractsTable)
+      .set({ status: "terminated" })
+      .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, ownerId), isNull(contractsTable.deletedAt)))
+      .returning();
+    if (!contract) throw new NotFoundException("Contract not found");
+
+    // Free + unlink every unit the contract covered.
+    const unitIds = (await this.db.select({ unitId: contractUnitsTable.unitId })
+      .from(contractUnitsTable).where(eq(contractUnitsTable.contractId, id))).map((r) => r.unitId);
+    if (unitIds.length > 0) {
+      await this.db.update(unitsTable).set({ status: "available" }).where(inArray(unitsTable.id, unitIds));
+    }
+    await this.db.delete(contractUnitsTable).where(eq(contractUnitsTable.contractId, id));
+
+    // Settle the still-unpaid installments per the chosen mode.
+    const unsettled = ["pending", "overdue", "partially_paid"] as any;
+    if (mode === "paid") {
+      await this.db.update(paymentsTable).set({ status: "paid", paidDate: today } as any)
+        .where(and(eq(paymentsTable.contractId, id), isNull(paymentsTable.deletedAt), inArray(paymentsTable.status, unsettled)));
+    } else if (mode === "cancelled") {
+      await this.db.update(paymentsTable).set({ status: "cancelled" } as any)
+        .where(and(eq(paymentsTable.contractId, id), isNull(paymentsTable.deletedAt), inArray(paymentsTable.status, unsettled)));
+    }
+
+    // ── Settle already-collected money ──
+    const buckets = await this.collectedBuckets(id);
+    const toRefund: { key: "deposit" | "advance" | "installments"; rows: { paymentId: number; amount: number }[] }[] = [];
+    if (body?.deposit === "refund" && buckets.deposit.total > 0.01) toRefund.push({ key: "deposit", rows: buckets.deposit.rows });
+    if (body?.advance === "refund" && buckets.advance.total > 0.01) toRefund.push({ key: "advance", rows: buckets.advance.rows });
+    if (body?.installments === "refund" && buckets.installments.total > 0.01) toRefund.push({ key: "installments", rows: buckets.installments.rows });
+
+    let refundNumber: string | null = null;
+    let refunded = 0;
+    const affected = new Set<number>();
+    if (toRefund.length > 0) {
+      refundNumber = await this.nextRefundNumber(ownerId);
+      const method = body?.refundMethod || "bank_transfer";
+      for (const rb of toRefund) {
+        for (const r of rb.rows) {
+          if (r.amount <= 0.01) continue; // only mirror positive collections
+          await this.db.insert(paymentCollectionsTable).values({
+            paymentId: r.paymentId, userId: ownerId, amount: (-r.amount).toFixed(2),
+            collectedDate: today, method, receiptNumber: refundNumber, notes: "استرداد عند إلغاء العقد",
+          } as any);
+          affected.add(r.paymentId);
+          refunded = round2(refunded + r.amount);
+        }
+        if (rb.key === "deposit") {
+          await this.db.update(contractsTable).set({ depositStatus: "returned" } as any).where(eq(contractsTable.id, id));
+        }
+      }
+    }
+    // Forfeited deposit stays with the landlord but is flagged as such.
+    if (body?.deposit === "forfeit" && buckets.deposit.total > 0.01) {
+      await this.db.update(contractsTable).set({ depositStatus: "forfeited" } as any).where(eq(contractsTable.id, id));
+    }
+
+    // Recompute the status of every installment a refund touched.
+    for (const pid of affected) {
+      const [p] = await this.db.select({ amount: paymentsTable.amount }).from(paymentsTable).where(eq(paymentsTable.id, pid));
+      if (!p) continue;
+      const cols = await this.db.select({ amount: paymentCollectionsTable.amount })
+        .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, pid));
+      const collected = round2(cols.reduce((s, c) => s + Number(c.amount), 0));
+      const amount = Number(p.amount);
+      const status = collected <= 0.01 ? "cancelled" : collected < amount - 0.01 ? "partially_paid" : "paid";
+      await this.db.update(paymentsTable)
+        .set({ status, paidDate: status === "paid" ? today : null } as any)
+        .where(eq(paymentsTable.id, pid));
+    }
+
+    return {
+      success: true,
+      refundNumber,
+      refunded: round2(refunded),
+      message: refundNumber
+        ? `تم إنهاء العقد وإصدار سند صرف ${refundNumber} بمبلغ ${round2(refunded)} ر.س`
+        : mode === "paid" ? "تم إنهاء العقد واعتبار جميع الأقساط مدفوعة"
+        : mode === "cancelled" ? "تم إنهاء العقد وإلغاء الأقساط غير المدفوعة"
+        : "تم إنهاء العقد",
+    };
+  }
 }
 
 @Module({ controllers: [ContractsController] })
