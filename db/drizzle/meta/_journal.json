@@ -351,6 +351,13 @@
       "when": 1779140880000,
       "tag": "0049_payment_vat_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1779140940000,
+      "tag": "0050_contract_ejar_number",
+      "breakpoints": true
     }
   ]
 }

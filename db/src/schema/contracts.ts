@@ -31,6 +31,8 @@ export const contractsTable = pgTable("contracts", {
   // contract signing
   signingDate: date("signing_date"),
   signingPlace: text("signing_place"),
+  // Optional reference to the official Ejar (إيجار) platform contract number.
+  ejarContractNumber: text("ejar_contract_number"),
   // financial
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
