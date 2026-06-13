@@ -103,15 +103,19 @@ class PackageController {
           const [created] = await this.db.insert(companiesTable).values(values as any).returning({ id: companiesTable.id });
           userPatch.companyId = created!.id;
         }
-      } else if (userType === "individual" && body?.landlord) {
-        // Create the default landlord (owner) record for the individual.
-        const l = body.landlord;
+      }
+
+      // Create the default landlord (owner) record ONLY when the account holder
+      // is also a landlord. A managing office/broker (selfLandlord = false)
+      // gets an account with no landlord of its own.
+      if (body?.selfLandlord) {
+        const l = body?.landlord ?? {};
         const [existing] = await this.db.select({ id: ownersTable.id }).from(ownersTable)
           .where(and(eq(ownersTable.userId, ownerId), isNull(ownersTable.deletedAt)));
         if (!existing) {
           await this.db.insert(ownersTable).values({
             userId: ownerId,
-            name: (l.name || owner?.name || "").trim() || "—",
+            name: (l.name || body?.company?.name || owner?.name || "").trim() || "—",
             idNumber: l.idNumber ?? null,
             phone: l.phone ?? userPatch.phone ?? null,
             email: l.email ?? null,
