@@ -27,6 +27,7 @@ class PackageController {
         packagePlan: usersTable.packagePlan, userType: usersTable.userType, onboardedAt: usersTable.onboardedAt,
         subscriptionStartedAt: usersTable.subscriptionStartedAt, subscriptionEndsAt: usersTable.subscriptionEndsAt,
         subscriptionStatus: usersTable.subscriptionStatus, billingCycle: usersTable.billingCycle,
+        setupCompletedAt: usersTable.setupCompletedAt,
       })
       .from(usersTable)
       .where(eq(usersTable.id, ownerId));
@@ -44,6 +45,8 @@ class PackageController {
       usage,
       userType: owner?.userType ?? "individual",
       onboarded: owner?.onboardedAt != null,
+      // First-run getting-started checklist completed (persisted, not local).
+      setupCompleted: owner?.setupCompletedAt != null,
       subscriptionStartedAt: owner?.subscriptionStartedAt ?? null,
       subscriptionEndsAt: endsAt,
       daysRemaining,
@@ -60,6 +63,16 @@ class PackageController {
         payable: isPayablePlan(owner?.packagePlan),
       },
     };
+  }
+
+  /** Mark the first-run getting-started checklist as complete (idempotent). */
+  @Post("setup-complete")
+  async markSetupComplete(@CurrentUser() user: AuthUser) {
+    const ownerId = scopeId(user);
+    await this.db.update(usersTable)
+      .set({ setupCompletedAt: new Date() } as any)
+      .where(and(eq(usersTable.id, ownerId), isNull(usersTable.setupCompletedAt)));
+    return { success: true };
   }
 
   /**

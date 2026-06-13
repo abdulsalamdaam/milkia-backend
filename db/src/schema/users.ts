@@ -57,6 +57,9 @@ export const usersTable = pgTable("users", {
   userType: text("user_type").notNull().default("individual"),
   /** Set when the first-login setup wizard is completed (null = not yet). */
   onboardedAt: timestamp("onboarded_at", { withTimezone: true }),
+  // When the first-run "getting started" checklist (deed → property → units →
+  // landlord → tenant → contract) was completed. Drives hiding that card.
+  setupCompletedAt: timestamp("setup_completed_at", { withTimezone: true }),
   /** Subscription window — set when a subscription payment is collected. */
   subscriptionStartedAt: timestamp("subscription_started_at", { withTimezone: true }),
   subscriptionEndsAt: timestamp("subscription_ends_at", { withTimezone: true }),
