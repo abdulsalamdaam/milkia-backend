@@ -379,6 +379,13 @@
       "when": 1779141120000,
       "tag": "0053_property_fee_invoice_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1779141180000,
+      "tag": "0054_expenses_landlord_payouts",
+      "breakpoints": true
     }
   ]
 }

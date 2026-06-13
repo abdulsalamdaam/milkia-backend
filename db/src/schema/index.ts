@@ -27,3 +27,5 @@ export * from "./lookups";
 export * from "./auditLogs";
 export * from "./simpleInvoices";
 export * from "./subscriptionPayments";
+export * from "./expenses";
+export * from "./landlordPayouts";
