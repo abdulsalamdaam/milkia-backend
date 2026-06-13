@@ -58,7 +58,12 @@ class SimpleInvoicesController {
   @RequirePermissions(PERMISSIONS.INVOICES_VIEW)
   async list(@CurrentUser() user: AuthUser, @Query() rawQuery: any) {
     const q = listQuerySchema.parse(rawQuery ?? {});
-    const type = DOC_TYPES.includes(rawQuery?.type) ? rawQuery.type : undefined;
+    // `type` may be a single value or a comma list (e.g. "credit,debit" for the
+    // combined Settlement page).
+    const types: string[] | undefined = typeof rawQuery?.type === "string" && rawQuery.type.includes(",")
+      ? rawQuery.type.split(",").map((s: string) => s.trim()).filter((t: string) => DOC_TYPES.includes(t as any))
+      : undefined;
+    const type = !types && DOC_TYPES.includes(rawQuery?.type) ? rawQuery.type : undefined;
     const status = DOC_STATUSES.includes(rawQuery?.status) ? rawQuery.status : undefined;
     // Optional landlord/property/unit filter — resolved to contract ids by the
     // frontend and passed through here.
@@ -68,7 +73,8 @@ class SimpleInvoicesController {
         : undefined;
     const base = and(eq(simpleInvoicesTable.userId, scopeId(user)), isNull(simpleInvoicesTable.deletedAt));
     const conds = [base];
-    if (type) conds.push(eq(simpleInvoicesTable.type, type as any));
+    if (types) conds.push(inArray(simpleInvoicesTable.type, types as any) as any);
+    else if (type) conds.push(eq(simpleInvoicesTable.type, type as any));
     if (status) conds.push(eq(simpleInvoicesTable.status, status as any));
     if (contractIds && contractIds.length > 0) conds.push(inArray(simpleInvoicesTable.contractId, contractIds) as any);
     if (q.search) {
@@ -81,7 +87,8 @@ class SimpleInvoicesController {
     }
     const where = and(...conds);
     const statsConds: any[] = [base];
-    if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
+    if (types) statsConds.push(inArray(simpleInvoicesTable.type, types as any));
+    else if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
     if (contractIds && contractIds.length > 0) statsConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
     const statsWhere = and(...statsConds);
 
