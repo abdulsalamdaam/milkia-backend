@@ -234,6 +234,8 @@ class PropertiesController {
       parkings: body.parkings ? parseInt(body.parkings) : null,
       yearBuilt: body.yearBuilt ? parseInt(body.yearBuilt) : null,
       buildingType: body.buildingType ?? null,
+      managementFeePercent: body.managementFeePercent != null && body.managementFeePercent !== ""
+        ? String(body.managementFeePercent) : null,
       typeLookupId,
       typeOther,
       usageLookupId: body.usageLookupId ?? await resolveLookupId(this.db, "property_usage", body.usageType),
@@ -286,6 +288,10 @@ class PropertiesController {
     const updateData: Record<string, unknown> = {};
     const fields = ["name", "status", "district", "street", "deedNumber", "totalUnits", "floors", "elevators", "parkings", "yearBuilt", "buildingType", "postalCode", "buildingNumber", "additionalNumber", "amenitiesData", "notes", "imageKey", "images", "isDraft", "typeLookupId", "usageLookupId", "regionLookupId", "cityLookupId"];
     for (const field of fields) if (body[field] !== undefined) updateData[field] = body[field];
+    if (body.managementFeePercent !== undefined) {
+      updateData.managementFeePercent = body.managementFeePercent == null || body.managementFeePercent === ""
+        ? null : String(body.managementFeePercent);
+    }
     // Keep the lookup FKs in sync when the matching text field changes.
     if (body.type !== undefined) {
       const typeLookupId = body.typeLookupId ?? await resolveLookupId(this.db, "property_type", body.type);

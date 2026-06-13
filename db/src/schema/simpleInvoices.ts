@@ -16,6 +16,10 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   number: text("number").notNull(),
   type: simpleInvoiceTypeEnum("type").notNull().default("invoice"),
   status: simpleInvoiceStatusEnum("status").notNull().default("draft"),
+  // Sub-kind of an invoice document. Normal rent invoices are null; a
+  // "commission" invoice (فاتورة عمولة) bills the property's landlord for the
+  // managing account's management fee. Seller = the account, buyer = landlord.
+  kind: text("kind"),
   // Optional links to the rest of the domain.
   contractId: integer("contract_id"),
   paymentId: integer("payment_id"),

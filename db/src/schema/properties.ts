@@ -1,4 +1,4 @@
-import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, boolean, pgEnum, uniqueIndex, jsonb, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -44,6 +44,10 @@ export const propertiesTable = pgTable("properties", {
   images: jsonb("images"),
   isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
+  // Management / commission fee % charged by the managing account (broker /
+  // office) to the property's landlord. When > 0, issuing a rent invoice for a
+  // tenant also generates a commission invoice (فاتورة عمولة) for the landlord.
+  managementFeePercent: numeric("management_fee_percent", { precision: 5, scale: 2 }),
   // Lookups-FK refactor (phase 3) — populated from the text columns
   // above; the text columns remain the source of truth until phase 6.
   typeLookupId: integer("type_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),

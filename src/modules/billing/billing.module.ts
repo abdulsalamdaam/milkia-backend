@@ -4,7 +4,10 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns } from "drizzle-orm";
-import { simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable } from "@oqudk/database";
+import {
+  simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
+  contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
+} from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -179,12 +182,82 @@ class SimpleInvoicesController {
       items,
       subtotal: subtotal.toFixed(2),
       total: total.toFixed(2),
+      kind: body?.kind ?? null,
       issueDate: body?.issueDate || today(),
       dueDate: body?.dueDate || null,
       billingReference: body?.billingReference ?? null,
       notes: body?.notes ?? null,
     } as any).returning();
+
+    // A rent invoice tied to a contract spawns a commission invoice when the
+    // rented property carries a management fee. Best-effort: never block the
+    // rent invoice if the commission step fails.
+    if (type === "invoice" && !body?.kind && contractId && paymentIds.length) {
+      try { await this.maybeCreateCommissionInvoice(scopeId(user), doc, Number(contractId)); }
+      catch { /* ignore — rent invoice already created */ }
+    }
     return doc;
+  }
+
+  /** Next commission-invoice number for an account: COM-000001, … */
+  private async nextCommissionNumber(userId: number): Promise<string> {
+    const [row] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, userId), eq(simpleInvoicesTable.kind, "commission")));
+    return `COM-${String(Number(row?.c ?? 0) + 1).padStart(6, "0")}`;
+  }
+
+  /**
+   * When a rent invoice is issued for a contract whose property has a
+   * management-fee %, create a paired commission invoice (فاتورة عمولة):
+   * seller = the managing account, buyer = the property's landlord, amount =
+   * the rent invoice total × the property's fee %. VAT is applied when the
+   * account is VAT-registered (its company carries a VAT number).
+   */
+  private async maybeCreateCommissionInvoice(uid: number, rentDoc: any, contractId: number) {
+    const [propRow] = await this.db.select({ pct: propertiesTable.managementFeePercent })
+      .from(contractUnitsTable)
+      .innerJoin(unitsTable, eq(contractUnitsTable.unitId, unitsTable.id))
+      .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
+      .where(eq(contractUnitsTable.contractId, contractId)).limit(1);
+    const pct = round2(Number(propRow?.pct ?? 0));
+    if (!(pct > 0)) return;
+
+    const [c] = await this.db.select({
+      landlordName: contractsTable.landlordName, landlordPhone: contractsTable.landlordPhone,
+      landlordEmail: contractsTable.landlordEmail, landlordAddress: contractsTable.landlordAddress,
+      landlordTaxNumber: contractsTable.landlordTaxNumber,
+    }).from(contractsTable).where(eq(contractsTable.id, contractId));
+    if (!c) return;
+
+    const [u] = await this.db.select({ companyId: usersTable.companyId })
+      .from(usersTable).where(eq(usersTable.id, uid)).limit(1);
+    let vatReg = false;
+    if (u?.companyId) {
+      const [comp] = await this.db.select({ vat: companiesTable.vatNumber })
+        .from(companiesTable).where(eq(companiesTable.id, u.companyId)).limit(1);
+      vatReg = !!(comp?.vat && String(comp.vat).trim());
+    }
+
+    const base = round2(Number(rentDoc.total));         // the installment total
+    const commissionNet = round2((base * pct) / 100);
+    if (commissionNet <= 0) return;
+    const total = vatReg ? round2(commissionNet * 1.15) : commissionNet;
+    const number = await this.nextCommissionNumber(uid);
+
+    await this.db.insert(simpleInvoicesTable).values({
+      userId: uid, number, type: "invoice", kind: "commission", status: "draft",
+      contractId,
+      tenantId: null, tenantName: c.landlordName ?? null,
+      client: {
+        phone: c.landlordPhone ?? undefined, email: c.landlordEmail ?? undefined,
+        address: c.landlordAddress ?? undefined, vatNumber: c.landlordTaxNumber ?? undefined,
+      },
+      items: [{ description: "عمولة إدارة الأملاك", quantity: 1, unitPrice: commissionNet, amount: commissionNet, vat: vatReg }],
+      subtotal: commissionNet.toFixed(2), total: total.toFixed(2),
+      issueDate: today(), dueDate: rentDoc.dueDate ?? null,
+      billingReference: rentDoc.number,
+      notes: `عمولة إدارة بنسبة ${pct}% على الفاتورة ${rentDoc.number}`,
+    } as any);
   }
 
   /**

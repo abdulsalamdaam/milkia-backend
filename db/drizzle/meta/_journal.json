@@ -372,6 +372,13 @@
       "when": 1779141060000,
       "tag": "0052_deposit_prepaid_method",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1779141120000,
+      "tag": "0053_property_fee_invoice_kind",
+      "breakpoints": true
     }
   ]
 }
