@@ -155,7 +155,7 @@ class ReportsController {
     // note already adjusted its parent invoice's total — counting the parent
     // alone reflects the net (no double counting).
     for (const inv of invoices) {
-      if (inv.kind === "commission" || inv.type !== "invoice" || inv.status !== "confirmed") continue;
+      if (inv.kind === "commission" || inv.kind === "deposit" || inv.type !== "invoice" || inv.status !== "confirmed") continue;
       const name = inv.tenantName || (inv.tenantId != null ? tenantById.get(inv.tenantId)?.name : null) || "—";
       const r = ensureT(inv.tenantId ?? null, name);
       r.invoiced = round2(r.invoiced + Number(inv.total));

@@ -1,7 +1,9 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, or, ilike, count, asc, desc, inArray } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable, paymentCollectionsTable, tenantsTable } from "@oqudk/database";
+import { contractsTable, contractUnitsTable, contractRentTermsTable, unitsTable, propertiesTable, paymentsTable, paymentCollectionsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
+
+const DEPOSIT_DESC = "تأمين (وديعة)";
 
 /** Parse + sanitise the per-year rent overrides sent by the client. */
 function parseRentTerms(raw: any): { year: number; amount: number }[] {
@@ -387,23 +389,115 @@ class ContractsController {
       }
     }
 
-    // Collected deposit → record a paid "deposit" row + collection so it shows
-    // in collections (with its method) as a held balance for the tenant.
+    // Collected deposit → issue a receipt voucher (سند قبض) only. A deposit is
+    // held trust money (amanat), NOT rent revenue — it is no longer an
+    // installment/payment row, so it never appears in the financial schedule.
+    // The voucher is viewable from the contract once the deposit is collected.
     const depositAmt = round2(Number(body.depositAmount) || 0);
     if (depositAmt > 0 && body.depositStatus === "collected") {
-      const depDate = body.depositDueDate || startDay;
-      const [depRow] = await this.db.insert(paymentsTable).values({
-        contractId: contract!.id, userId: ownerId, amount: depositAmt.toFixed(2),
-        dueDate: depDate, status: "paid", paidDate: depDate,
-        description: "تأمين (وديعة)", vatEnabled: false, isDemo: false,
-      } as any).returning();
-      await this.db.insert(paymentCollectionsTable).values({
-        paymentId: depRow!.id, userId: ownerId, amount: depositAmt.toFixed(2),
-        collectedDate: depDate, method: body.depositMethod || "bank_transfer", notes: "تأمين (وديعة)",
-      } as any);
+      await this.createDepositVoucher(
+        ownerId, contract!, depositAmt, body.depositDueDate || startDay, body.depositMethod || "bank_transfer",
+      );
     }
 
     return { ...contract, unitIds, installmentsCreated: inserted.length };
+  }
+
+  /** Next per-account receipt-voucher (سند قبض) number: RV-000001, … */
+  private async nextReceiptNumber(ownerId: number): Promise<string> {
+    const [row] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, ownerId), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
+    return `RV-${String(Number(row?.c ?? 0) + 1).padStart(6, "0")}`;
+  }
+
+  /**
+   * Issue a deposit receipt voucher (سند قبض) for a contract: a confirmed
+   * simple-invoice marked `kind="deposit"` (so it stays out of revenue/reports),
+   * no VAT, stamped with an RV number. This is the ONLY artefact a collected
+   * deposit produces — there is no installment/payment row for it.
+   */
+  private async createDepositVoucher(ownerId: number, contract: any, amount: number, date: string, method: string) {
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const amt = round2(amount);
+    const [invCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.type, "invoice" as any)));
+    const number = `INV-${String(Number(invCount?.c ?? 0) + 1).padStart(6, "0")}`;
+    const voucher = await this.nextReceiptNumber(ownerId);
+    const [doc] = await this.db.insert(simpleInvoicesTable).values({
+      userId: ownerId, number, type: "invoice", kind: "deposit", status: "confirmed",
+      contractId: contract.id, tenantId: contract.tenantId ?? null, tenantName: contract.tenantName ?? null,
+      items: [{ description: DEPOSIT_DESC, quantity: 1, unitPrice: amt, amount: amt, vat: false }],
+      subtotal: amt.toFixed(2), total: amt.toFixed(2),
+      issueDate: date, paidDate: date, confirmedAt: new Date(),
+      receiptNumber: voucher, paymentMethod: method, notes: DEPOSIT_DESC,
+    } as any).returning();
+    return doc;
+  }
+
+  /**
+   * Deposit summary for a contract: amount, status, and its receipt voucher (if
+   * collected). Drives the deposit card on the contract detail.
+   */
+  @Get(":contractId/deposit")
+  @RequirePermissions(PERMISSIONS.CONTRACTS_VIEW)
+  async getDeposit(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string) {
+    const id = parseInt(contractId, 10);
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const ownerId = scopeId(user);
+    const [contract] = await this.db.select({
+      depositAmount: contractsTable.depositAmount, depositStatus: contractsTable.depositStatus,
+      depositMethod: contractsTable.depositMethod, depositDueDate: contractsTable.depositDueDate,
+    }).from(contractsTable)
+      .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, ownerId), isNull(contractsTable.deletedAt)));
+    if (!contract) throw new NotFoundException("Contract not found");
+    const [voucher] = await this.db.select().from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.contractId, id),
+        eq(simpleInvoicesTable.kind, "deposit"), isNull(simpleInvoicesTable.deletedAt)))
+      .orderBy(desc(simpleInvoicesTable.id)).limit(1);
+    return {
+      amount: round2(Number(contract.depositAmount) || 0),
+      status: contract.depositStatus ?? null,
+      method: contract.depositMethod ?? null,
+      dueDate: contract.depositDueDate ?? null,
+      voucher: voucher ?? null,
+    };
+  }
+
+  /**
+   * Collect a contract's deposit — marks it collected on the contract and issues
+   * the receipt voucher (سند قبض). Idempotent: returns the existing voucher if
+   * the deposit was already collected.
+   */
+  @Post(":contractId/collect-deposit")
+  @RequirePermissions(PERMISSIONS.PAYMENTS_WRITE)
+  async collectDeposit(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string, @Body() body: any) {
+    const id = parseInt(contractId, 10);
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const ownerId = scopeId(user);
+    const [contract] = await this.db.select().from(contractsTable)
+      .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, ownerId), isNull(contractsTable.deletedAt)));
+    if (!contract) throw new NotFoundException("Contract not found");
+    const amt = round2(Number(contract.depositAmount) || 0);
+    if (!(amt > 0)) throw new BadRequestException("لا يوجد مبلغ تأمين على هذا العقد");
+
+    const [existing] = await this.db.select().from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.contractId, id),
+        eq(simpleInvoicesTable.kind, "deposit"), isNull(simpleInvoicesTable.deletedAt)))
+      .orderBy(desc(simpleInvoicesTable.id)).limit(1);
+    if (existing && existing.status !== "cancelled") {
+      if (contract.depositStatus !== "collected") {
+        await this.db.update(contractsTable).set({ depositStatus: "collected" } as any).where(eq(contractsTable.id, id));
+      }
+      return { voucher: existing };
+    }
+
+    const date = body?.paidDate || new Date().toISOString().slice(0, 10);
+    const method = body?.method || contract.depositMethod || "bank_transfer";
+    const voucher = await this.createDepositVoucher(ownerId, contract, amt, date, method);
+    await this.db.update(contractsTable)
+      .set({ depositStatus: "collected", depositMethod: method, depositDueDate: contract.depositDueDate || date } as any)
+      .where(eq(contractsTable.id, id));
+    return { voucher };
   }
 
   @Post(":contractId/generate-installments")
@@ -577,7 +671,20 @@ class ContractsController {
       b.total = round2(b.total + amt);
       b.rows.push({ paymentId: c.paymentId, amount: amt });
     }
-    return { deposit, advance, installments };
+    // New-model deposits are receipt vouchers (kind="deposit"), not payment
+    // rows — add their value to the deposit bucket and track them for refund.
+    const depVouchers = await this.db.select({ id: simpleInvoicesTable.id, total: simpleInvoicesTable.total })
+      .from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.contractId, contractId), eq(simpleInvoicesTable.kind, "deposit"),
+        eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt)));
+    const depositVoucherIds: number[] = [];
+    let depositVoucherTotal = 0;
+    for (const v of depVouchers) {
+      deposit.total = round2(deposit.total + Number(v.total));
+      depositVoucherTotal = round2(depositVoucherTotal + Number(v.total));
+      depositVoucherIds.push(v.id);
+    }
+    return { deposit, advance, installments, depositVoucherIds, depositVoucherTotal };
   }
 
   /** Next per-account disbursement-voucher (سند صرف) number: RFND-0001, … */
@@ -679,6 +786,14 @@ class ContractsController {
           await this.db.update(contractsTable).set({ depositStatus: "returned" } as any).where(eq(contractsTable.id, id));
         }
       }
+    }
+    // New-model deposit refund: cancel its receipt voucher(s) and count the
+    // refunded amount (voucher deposits have no payment rows to mirror).
+    if (body?.deposit === "refund" && buckets.depositVoucherIds.length > 0) {
+      await this.db.update(simpleInvoicesTable).set({ status: "cancelled" } as any)
+        .where(inArray(simpleInvoicesTable.id, buckets.depositVoucherIds));
+      refunded = round2(refunded + buckets.depositVoucherTotal);
+      await this.db.update(contractsTable).set({ depositStatus: "returned" } as any).where(eq(contractsTable.id, id));
     }
     // Forfeited deposit stays with the landlord but is flagged as such.
     if (body?.deposit === "forfeit" && buckets.deposit.total > 0.01) {

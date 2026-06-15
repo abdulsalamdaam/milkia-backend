@@ -1,7 +1,9 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
+import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
 import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
+
+const DEPOSIT_DESC = "تأمين (وديعة)";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -55,6 +57,10 @@ class PaymentsController {
     if (status) conds.push(eq(paymentsTable.status, status as any));
     else if (statusIn && statusIn.length > 0) conds.push(inArray(paymentsTable.status, statusIn as any));
     if (contractIds && contractIds.length > 0) conds.push(inArray(paymentsTable.contractId, contractIds));
+    // Deposits are not installments — they live on the contract as a receipt
+    // voucher, so never surface them in the financial schedule (covers legacy
+    // deposit rows created before the deposit-as-voucher change).
+    conds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
     const where = and(...conds);
 
     let rowsQ = this.db
@@ -224,6 +230,9 @@ class PaymentsController {
     const collConds: any[] = [eq(paymentCollectionsTable.userId, uid)];
     if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s), ilike(simpleInvoicesTable.number, s)));
     if (contractIds && contractIds.length > 0) collConds.push(inArray(paymentsTable.contractId, contractIds));
+    // Legacy deposit collections (on a deposit payment row) are not revenue —
+    // exclude them; the deposit shows once, as its receipt voucher (section 2).
+    collConds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
     const collections = await this.db
       .select({
         id: paymentCollectionsTable.id,

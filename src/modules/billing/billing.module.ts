@@ -3,7 +3,7 @@ import {
   BadRequestException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns } from "drizzle-orm";
+import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns } from "drizzle-orm";
 import {
   simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
@@ -78,6 +78,10 @@ class SimpleInvoicesController {
     else if (type) conds.push(eq(simpleInvoicesTable.type, type as any));
     if (status) conds.push(eq(simpleInvoicesTable.status, status as any));
     if (contractIds && contractIds.length > 0) conds.push(inArray(simpleInvoicesTable.contractId, contractIds) as any);
+    // Hide deposit vouchers from the Invoices tab (they're receipt vouchers,
+    // surfaced under Collections / Receipt Vouchers, not tax invoices).
+    const excludeDeposit = rawQuery?.excludeDeposit === "true" || rawQuery?.excludeDeposit === true;
+    if (excludeDeposit) conds.push(or(isNull(simpleInvoicesTable.kind), ne(simpleInvoicesTable.kind, "deposit")) as any);
     if (q.search) {
       conds.push(or(
         ilike(simpleInvoicesTable.number, `%${q.search}%`),
@@ -91,6 +95,7 @@ class SimpleInvoicesController {
     if (types) statsConds.push(inArray(simpleInvoicesTable.type, types as any));
     else if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
     if (contractIds && contractIds.length > 0) statsConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
+    if (excludeDeposit) statsConds.push(or(isNull(simpleInvoicesTable.kind), ne(simpleInvoicesTable.kind, "deposit")) as any);
     const statsWhere = and(...statsConds);
 
     const [rows, totalRow, statsRows] = await Promise.all([
