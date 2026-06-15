@@ -216,13 +216,9 @@ class SimpleInvoicesController {
       notes: body?.notes ?? null,
     } as any).returning();
 
-    // A rent invoice tied to a contract spawns a commission invoice when the
-    // rented property carries a management fee. Best-effort: never block the
-    // rent invoice if the commission step fails.
-    if (type === "invoice" && !body?.kind && contractId && paymentIds.length) {
-      try { await this.maybeCreateCommissionInvoice(scopeId(user), doc, Number(contractId)); }
-      catch { /* ignore — rent invoice already created */ }
-    }
+    // NB: the paired commission invoice is NOT created here — it's spawned only
+    // when this rent invoice is APPROVED (see approve()), so a commission never
+    // sits next to a still-draft rent invoice.
 
     // Advance rent: the invoice is billed at the full payment face value, and
     // any prior collection on these installments (e.g. advance collected at
@@ -262,14 +258,14 @@ class SimpleInvoicesController {
       .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
       .where(eq(contractUnitsTable.contractId, contractId)).limit(1);
     const pct = round2(Number(propRow?.pct ?? 0));
-    if (!(pct > 0)) return;
+    if (!(pct > 0)) return null;
 
     const [c] = await this.db.select({
       landlordName: contractsTable.landlordName, landlordPhone: contractsTable.landlordPhone,
       landlordEmail: contractsTable.landlordEmail, landlordAddress: contractsTable.landlordAddress,
       landlordTaxNumber: contractsTable.landlordTaxNumber,
     }).from(contractsTable).where(eq(contractsTable.id, contractId));
-    if (!c) return;
+    if (!c) return null;
 
     const [u] = await this.db.select({ companyId: usersTable.companyId })
       .from(usersTable).where(eq(usersTable.id, uid)).limit(1);
@@ -297,13 +293,13 @@ class SimpleInvoicesController {
         base = round2(base + (p.vatEnabled ? round2(amt / 1.15) : amt));
       }
     }
-    if (!(base > 0)) return;
+    if (!(base > 0)) return null;
     const commissionNet = round2((base * pct) / 100);
-    if (commissionNet <= 0) return;
+    if (commissionNet <= 0) return null;
     const total = vatReg ? round2(commissionNet * 1.15) : commissionNet;
     const number = await this.nextCommissionNumber(uid);
 
-    await this.db.insert(simpleInvoicesTable).values({
+    const [comm] = await this.db.insert(simpleInvoicesTable).values({
       userId: uid, number, type: "invoice", kind: "commission", status: "draft",
       contractId,
       tenantId: null, tenantName: c.landlordName ?? null,
@@ -316,7 +312,8 @@ class SimpleInvoicesController {
       issueDate: today(), dueDate: rentDoc.dueDate ?? null,
       billingReference: rentDoc.number,
       notes: `عمولة إدارة بنسبة ${pct}% على الفاتورة ${rentDoc.number}`,
-    } as any);
+    } as any).returning();
+    return comm ?? null;
   }
 
   /**
@@ -496,7 +493,17 @@ class SimpleInvoicesController {
     const [updated] = await this.db.update(simpleInvoicesTable).set({
       status: "confirmed", confirmedAt: new Date(),
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
-    return updated;
+
+    // A rent invoice spawns its paired commission invoice (فاتورة عمولة) only
+    // once APPROVED — not at draft — so the commission surfaces alongside an
+    // actually-issued rent invoice and is linked to it via billingReference.
+    // Best-effort: never block the approval if the commission step fails.
+    let commission: any = null;
+    if (doc.kind !== "commission" && doc.contractId && ((doc.paymentIds && doc.paymentIds.length) || doc.paymentId)) {
+      try { commission = await this.maybeCreateCommissionInvoice(uid, doc, Number(doc.contractId)); }
+      catch { /* ignore — rent invoice already approved */ }
+    }
+    return { ...updated, commission };
   }
 
   /**
