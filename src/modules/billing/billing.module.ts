@@ -81,13 +81,17 @@ class SimpleInvoicesController {
     // Hide vouchers (deposit + receipt) from the Invoices / Collections views —
     // they're evidence documents shown under Receipt Vouchers, never tax
     // invoices and never collectible.
-    const excludeVouchers = rawQuery?.excludeVouchers === "true" || rawQuery?.excludeVouchers === true
-      || rawQuery?.excludeDeposit === "true" || rawQuery?.excludeDeposit === true;
+    const excludeVouchers = rawQuery?.excludeVouchers === "true" || rawQuery?.excludeVouchers === true;
+    // Deposit-only exclusion: deposits live solely on the contract detail and
+    // must not appear even in the global Receipt Vouchers list.
+    const excludeDeposit = rawQuery?.excludeDeposit === "true" || rawQuery?.excludeDeposit === true;
     const notVoucherCond = or(
       isNull(simpleInvoicesTable.kind),
       and(ne(simpleInvoicesTable.kind, "deposit"), ne(simpleInvoicesTable.kind, "receipt")),
     );
+    const notDepositCond = or(isNull(simpleInvoicesTable.kind), ne(simpleInvoicesTable.kind, "deposit"));
     if (excludeVouchers) conds.push(notVoucherCond as any);
+    else if (excludeDeposit) conds.push(notDepositCond as any);
     if (q.search) {
       conds.push(or(
         ilike(simpleInvoicesTable.number, `%${q.search}%`),
@@ -102,6 +106,7 @@ class SimpleInvoicesController {
     else if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
     if (contractIds && contractIds.length > 0) statsConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
     if (excludeVouchers) statsConds.push(notVoucherCond as any);
+    else if (excludeDeposit) statsConds.push(notDepositCond as any);
     const statsWhere = and(...statsConds);
 
     const [rows, totalRow, statsRows] = await Promise.all([
@@ -482,10 +487,18 @@ class SimpleInvoicesController {
             quantity: 1, unitPrice: adjAmount, amount: adjAmount, vat: noteHasVat,
           };
           const prevItems = Array.isArray(refInv.items) ? refInv.items : [];
+          // If the new total exceeds what's already been collected (a debit note
+          // on a paid invoice), re-open it: clear the paid stamp so it shows as
+          // partially paid and the Collect action works again.
+          const [refColl] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+            .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, refInv.id));
+          const refCollected = round2(Number(refColl?.total ?? 0));
+          const reopen = refCollected < newTotal - 0.01;
           await this.db.update(simpleInvoicesTable).set({
             items: [...prevItems, adjLine],
             subtotal: newSubtotal.toFixed(2),
             total: newTotal.toFixed(2),
+            ...(reopen ? { paidDate: null } : {}),
             notes: `${refInv.notes ? refInv.notes + " · " : ""}${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
           }).where(eq(simpleInvoicesTable.id, refInv.id));
           // Adjust the referenced invoice's installment amount accordingly.
@@ -545,7 +558,10 @@ class SimpleInvoicesController {
     if (!doc) throw new NotFoundException("Document not found");
     if (doc.type !== "invoice") throw new BadRequestException("التحصيل يتم على الفواتير فقط");
     if (doc.status !== "confirmed") throw new BadRequestException("يجب اعتماد الفاتورة قبل التحصيل");
-    if (doc.paidDate || doc.receiptNumber) throw new BadRequestException("تم تحصيل هذه الفاتورة مسبقاً");
+    // NB: a fully-collected invoice carries a paidDate/receiptNumber, but a
+    // debit note can later raise its total — so "already collected" is decided
+    // by the remaining-balance check below (doc.total − collected), NOT by the
+    // presence of a paid stamp.
 
     const paidDate = body?.paidDate || today();
     // Per-account sequential receipt-voucher number (RV-000001…) — count the
