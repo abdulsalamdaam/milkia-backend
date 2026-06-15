@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray } from "drizzle-orm";
+import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, notExists } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
 
 const DEPOSIT_DESC = "تأمين (وديعة)";
@@ -233,6 +234,9 @@ class PaymentsController {
     // Legacy deposit collections (on a deposit payment row) are not revenue —
     // exclude them; the deposit shows once, as its receipt voucher (section 2).
     collConds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
+    // For invoice-only collections (no installment, e.g. a collected commission
+    // invoice) the contract/tenant come from the invoice, not the payment.
+    const invContract = alias(contractsTable, "inv_contract");
     const collections = await this.db
       .select({
         id: paymentCollectionsTable.id,
@@ -249,11 +253,15 @@ class PaymentsController {
         tenantName: contractsTable.tenantName,
         invoiceId: paymentCollectionsTable.invoiceId,
         invoiceNumber: simpleInvoicesTable.number,
+        invContractId: simpleInvoicesTable.contractId,
+        invContractNumber: invContract.contractNumber,
+        invTenantName: simpleInvoicesTable.tenantName,
       })
       .from(paymentCollectionsTable)
       .leftJoin(paymentsTable, eq(paymentCollectionsTable.paymentId, paymentsTable.id))
       .leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
       .leftJoin(simpleInvoicesTable, eq(paymentCollectionsTable.invoiceId, simpleInvoicesTable.id))
+      .leftJoin(invContract, eq(simpleInvoicesTable.contractId, invContract.id))
       .where(and(...collConds));
 
     // 2. Confirmed invoices NOT linked to an installment (free invoices) —
@@ -271,6 +279,13 @@ class PaymentsController {
     // Vouchers (deposit / receipt) are evidence, not collections — keep them out
     // of the Collections tab; they live under Receipt Vouchers.
     invConds.push(or(isNull(simpleInvoicesTable.kind), and(ne(simpleInvoicesTable.kind, "deposit"), ne(simpleInvoicesTable.kind, "receipt"))));
+    // Skip invoices that already have a recorded collection — they're shown by
+    // section 1 (the collection row). Without this, a collected commission/free
+    // invoice appears twice (once as its collection, once as a "free invoice").
+    invConds.push(notExists(
+      this.db.select({ id: paymentCollectionsTable.id }).from(paymentCollectionsTable)
+        .where(eq(paymentCollectionsTable.invoiceId, simpleInvoicesTable.id)),
+    ));
     const freeInvoices = await this.db
       .select({
         id: simpleInvoicesTable.id,
@@ -292,7 +307,13 @@ class PaymentsController {
 
     // Unify both sources into one collection shape.
     const merged = [
-      ...collections.map((c) => ({ ...c })),
+      ...collections.map((c) => ({
+        ...c,
+        // Fall back to the invoice's contract/tenant for invoice-only collections.
+        contractId: c.contractId ?? c.invContractId ?? null,
+        contractNumber: c.contractNumber ?? c.invContractNumber ?? null,
+        tenantName: c.tenantName ?? c.invTenantName ?? null,
+      })),
       ...freeInvoices.map((iv) => ({
         id: -iv.id, // negative id-space avoids collision with collection ids
         paymentId: null as number | null,

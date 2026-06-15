@@ -378,8 +378,12 @@ class SimpleInvoicesController {
       .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
     const voucher = `RV-${String(Number(rvCount ?? 0) + 1).padStart(6, "0")}`;
 
+    // "Include as collection?" — when true the voucher counts in Collections
+    // (kind = null, so it surfaces as a confirmed collection); when false it's
+    // evidence only (kind = "receipt"), shown solely under Receipt Vouchers.
+    const voucherKind = body?.kind ?? (body?.countAsCollection ? null : "receipt");
     const [doc] = await this.db.insert(simpleInvoicesTable).values({
-      userId: uid, number, type: "invoice", kind: body?.kind ?? "receipt", status: "confirmed",
+      userId: uid, number, type: "invoice", kind: voucherKind, status: "confirmed",
       contractId: contractId ?? null, tenantId: tenantId ?? null, tenantName: tenantName ?? null,
       client: body?.client ?? null, items,
       subtotal: subtotal.toFixed(2), total: amount.toFixed(2),
