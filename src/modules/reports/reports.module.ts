@@ -224,12 +224,15 @@ class ReportsController {
   @RequirePermissions(PERMISSIONS.EXPENSES_WRITE)
   async createExpense(@CurrentUser() user: AuthUser, @Body() body: any) {
     const amount = round2(Number(body?.amount));
+    if (body?.ownerId == null) throw new BadRequestException("المؤجر مطلوب");
+    if (body?.propertyId == null) throw new BadRequestException("العقار مطلوب");
+    if (!body?.category || !String(body.category).trim()) throw new BadRequestException("البند مطلوب");
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("المبلغ غير صالح");
     const [row] = await this.db.insert(expensesTable).values({
       userId: scopeId(user),
-      propertyId: body?.propertyId != null ? Number(body.propertyId) : null,
-      ownerId: body?.ownerId != null ? Number(body.ownerId) : null,
-      category: body?.category ?? null,
+      propertyId: Number(body.propertyId),
+      ownerId: Number(body.ownerId),
+      category: String(body.category).trim(),
       amount: amount.toFixed(2),
       expenseDate: body?.expenseDate ?? null,
       notes: body?.notes ?? null,
