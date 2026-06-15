@@ -464,7 +464,20 @@ class SimpleInvoicesController {
         if (refInv) {
           const newSubtotal = Math.max(0, round2(Number(refInv.subtotal) + sign * Number(doc.subtotal)));
           const newTotal = Math.max(0, round2(Number(refInv.total) + sign * Number(doc.total)));
+          // Append an adjustment LINE for the note so the invoice's line items
+          // still reconcile with its (now reduced/increased) subtotal + total —
+          // otherwise the lines keep their original values while the totals
+          // change, and the document no longer adds up. The line carries VAT
+          // only if the note itself did, so the per-line tax stays consistent.
+          const noteHasVat = round2(Number(doc.total) - Number(doc.subtotal)) > 0.01;
+          const adjAmount = round2(sign * Number(doc.subtotal));
+          const adjLine = {
+            description: `${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
+            quantity: 1, unitPrice: adjAmount, amount: adjAmount, vat: noteHasVat,
+          };
+          const prevItems = Array.isArray(refInv.items) ? refInv.items : [];
           await this.db.update(simpleInvoicesTable).set({
+            items: [...prevItems, adjLine],
             subtotal: newSubtotal.toFixed(2),
             total: newTotal.toFixed(2),
             notes: `${refInv.notes ? refInv.notes + " · " : ""}${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
