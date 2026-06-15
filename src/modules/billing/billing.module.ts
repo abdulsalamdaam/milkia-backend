@@ -368,15 +368,19 @@ class SimpleInvoicesController {
         .where(and(eq(paymentsTable.id, payIds[0]!), eq(paymentsTable.userId, uid)));
       if (pay) { contractId = pay.contractId; tenantName = tenantName || pay.tenantName; tenantId = tenantId ?? pay.tenantId; }
     }
+    // A receipt voucher must belong to a contract.
+    if (!contractId) throw new BadRequestException("العقد مطلوب لإصدار سند القبض");
 
     const items = Array.isArray(body?.items) && body.items.length
       ? normalizeItems(body.items)
       : [{ description: String(body?.description || "سند قبض").trim(), quantity: 1, unitPrice: amount, amount, vat: false }];
     const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-    const number = await this.nextNumber(uid, "invoice");
     const [{ c: rvCount }] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
       .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
     const voucher = `RV-${String(Number(rvCount ?? 0) + 1).padStart(6, "0")}`;
+    // A receipt voucher is NOT an invoice — its document number IS the RV number;
+    // it never consumes an INV-#### sequence.
+    const number = voucher;
 
     // "Include as collection?" — when true the voucher counts in Collections
     // (kind = null, so it surfaces as a confirmed collection); when false it's

@@ -5,6 +5,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
 
 const DEPOSIT_DESC = "تأمين (وديعة)";
+const ADVANCE_NOTE = "إيجار مدفوع مقدماً";
 import { listQuerySchema } from "../../common/pagination";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -234,6 +235,10 @@ class PaymentsController {
     // Legacy deposit collections (on a deposit payment row) are not revenue —
     // exclude them; the deposit shows once, as its receipt voucher (section 2).
     collConds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
+    // Advance/prepaid rent is applied to the rent invoice, not shown as its own
+    // collection — so an advance-paid invoice has ONE collection row (the actual
+    // collect), not two (advance + remainder).
+    collConds.push(or(isNull(paymentCollectionsTable.notes), ne(paymentCollectionsTable.notes, ADVANCE_NOTE)));
     // For invoice-only collections (no installment, e.g. a collected commission
     // invoice) the contract/tenant come from the invoice, not the payment.
     const invContract = alias(contractsTable, "inv_contract");

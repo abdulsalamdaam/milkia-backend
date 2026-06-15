@@ -419,10 +419,10 @@ class ContractsController {
   private async createDepositVoucher(ownerId: number, contract: any, amount: number, date: string, method: string) {
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const amt = round2(amount);
-    const [invCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.type, "invoice" as any)));
-    const number = `INV-${String(Number(invCount?.c ?? 0) + 1).padStart(6, "0")}`;
     const voucher = await this.nextReceiptNumber(ownerId);
+    // A deposit voucher is a سند قبض, not a tax invoice — its number IS the RV
+    // number; it never consumes an INV-#### sequence.
+    const number = voucher;
     const [doc] = await this.db.insert(simpleInvoicesTable).values({
       userId: ownerId, number, type: "invoice", kind: "deposit", status: "confirmed",
       contractId: contract.id, tenantId: contract.tenantId ?? null, tenantName: contract.tenantName ?? null,
