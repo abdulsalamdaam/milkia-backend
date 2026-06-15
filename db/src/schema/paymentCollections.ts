@@ -13,7 +13,9 @@ import { usersTable } from "./users";
  */
 export const paymentCollectionsTable = pgTable("payment_collections", {
   id: serial("id").primaryKey(),
-  paymentId: integer("payment_id").notNull().references(() => paymentsTable.id, { onDelete: "cascade" }),
+  // Null for collections against installment-less invoices (commission / free
+  // invoices) — those reconcile by invoiceId instead.
+  paymentId: integer("payment_id").references(() => paymentsTable.id, { onDelete: "cascade" }),
   // Landlord that owns the payment — kept for tenant-scoped queries.
   userId: integer("user_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   amount: numeric("amount", { precision: 12, scale: 2 }).notNull(),

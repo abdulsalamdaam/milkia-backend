@@ -568,6 +568,20 @@ class SimpleInvoicesController {
       toCollect = round2(toCollect - amt);
     }
 
+    // Invoices not backed by an installment (commission / free invoices) still
+    // record a collection — against the invoice only — so their collected
+    // amount is consistent with the "paid" stamp (no "paid but collected = 0").
+    if (!ids.length) {
+      const collectAmt = body?.amount != null ? round2(Number(body.amount)) : invoiceRemaining;
+      if (collectAmt > 0.01) {
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: null, userId: uid, amount: collectAmt.toFixed(2), collectedDate: paidDate,
+          method, receiptNumber: receipt, invoiceId: doc.id,
+          notes: body?.notes ?? `فاتورة ${doc.number}`,
+        } as any);
+      }
+    }
+
     // Only mark the invoice fully collected when prior + this collection cover
     // the total; a partial collection keeps it confirmed (collectible again).
     const collectedNow = body?.amount != null ? round2(Number(body.amount)) : invoiceRemaining;

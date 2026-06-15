@@ -393,6 +393,13 @@
       "when": 1779141240000,
       "tag": "0055_user_setup_completed",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1779141300000,
+      "tag": "0056_collection_optional_payment",
+      "breakpoints": true
     }
   ]
 }
