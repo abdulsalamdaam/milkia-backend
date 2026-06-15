@@ -19,6 +19,7 @@ import { scopeId } from "../../common/scope";
 
 const DOC_TYPES = ["invoice", "credit", "debit"] as const;
 const DOC_STATUSES = ["draft", "confirmed", "cancelled"] as const;
+const DEPOSIT_DESC = "تأمين (وديعة)";
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -175,6 +176,25 @@ class SimpleInvoicesController {
       ? body.paymentIds.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
       : (body?.paymentId ? [Number(body.paymentId)] : []);
 
+    // A security deposit (الوديعة/الضمان) is held trust money (amanat), never
+    // revenue — collecting it must produce a receipt voucher (سند قبض), not a
+    // tax invoice. If a linked installment is a deposit and the caller hasn't
+    // explicitly opted to bill it (billDeposit), divert to a receipt voucher
+    // (which also records the collection against the deposit installment).
+    if (type === "invoice" && !body?.kind && paymentIds.length && !body?.billDeposit) {
+      const linked = await this.db.select({ description: paymentsTable.description })
+        .from(paymentsTable)
+        .where(and(inArray(paymentsTable.id, paymentIds), eq(paymentsTable.userId, scopeId(user))));
+      if (linked.some((p) => p.description === DEPOSIT_DESC)) {
+        return this.createReceiptVoucher(user, {
+          amount: total, contractId, tenantId, tenantName, client,
+          paidDate: body?.issueDate, method: body?.method, paymentIds,
+          description: items[0]?.description || DEPOSIT_DESC,
+          notes: body?.notes,
+        });
+      }
+    }
+
     const [doc] = await this.db.insert(simpleInvoicesTable).values({
       userId: scopeId(user),
       number,
@@ -203,6 +223,19 @@ class SimpleInvoicesController {
       try { await this.maybeCreateCommissionInvoice(scopeId(user), doc, Number(contractId)); }
       catch { /* ignore — rent invoice already created */ }
     }
+
+    // Advance rent: the invoice is billed at the full payment face value, and
+    // any prior collection on these installments (e.g. advance collected at
+    // contract start) is brought onto the invoice so its remaining balance
+    // reflects the advance instead of shrinking the invoice itself.
+    if (type === "invoice" && !body?.kind && paymentIds.length) {
+      await this.db.update(paymentCollectionsTable).set({ invoiceId: doc.id })
+        .where(and(
+          inArray(paymentCollectionsTable.paymentId, paymentIds),
+          isNull(paymentCollectionsTable.invoiceId),
+          eq(paymentCollectionsTable.userId, scopeId(user)),
+        ));
+    }
     return doc;
   }
 
@@ -217,8 +250,10 @@ class SimpleInvoicesController {
    * When a rent invoice is issued for a contract whose property has a
    * management-fee %, create a paired commission invoice (فاتورة عمولة):
    * seller = the managing account, buyer = the property's landlord, amount =
-   * the rent invoice total × the property's fee %. VAT is applied when the
-   * account is VAT-registered (its company carries a VAT number).
+   * the **pre-VAT rent** × the property's fee %. The commission base is the
+   * rent only — service fees (gas, cleaning, …) are excluded — and VAT is
+   * never part of the base. VAT is then applied on top of the commission when
+   * the account is VAT-registered (its company carries a VAT number).
    */
   private async maybeCreateCommissionInvoice(uid: number, rentDoc: any, contractId: number) {
     const [propRow] = await this.db.select({ pct: propertiesTable.managementFeePercent })
@@ -245,7 +280,24 @@ class SimpleInvoicesController {
       vatReg = !!(comp?.vat && String(comp.vat).trim());
     }
 
-    const base = round2(Number(rentDoc.total));         // the installment total
+    // Commission base = pre-VAT RENT only. Rent installments have a null
+    // description; service-fee installments carry a name and are excluded.
+    // Installment amounts are VAT-inclusive when the contract has VAT, so we
+    // strip the 15% back off to land on the net rent.
+    const payIds: number[] = (rentDoc.paymentIds && rentDoc.paymentIds.length)
+      ? rentDoc.paymentIds.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : (rentDoc.paymentId ? [Number(rentDoc.paymentId)] : []);
+    let base = 0;
+    if (payIds.length) {
+      const pays = await this.db.select().from(paymentsTable)
+        .where(and(inArray(paymentsTable.id, payIds), eq(paymentsTable.userId, uid)));
+      for (const p of pays) {
+        if (p.description) continue;                    // rent rows only (no description)
+        const amt = round2(Number(p.amount));
+        base = round2(base + (p.vatEnabled ? round2(amt / 1.15) : amt));
+      }
+    }
+    if (!(base > 0)) return;
     const commissionNet = round2((base * pct) / 100);
     if (commissionNet <= 0) return;
     const total = vatReg ? round2(commissionNet * 1.15) : commissionNet;
@@ -281,7 +333,15 @@ class SimpleInvoicesController {
     const paidDate = body?.paidDate || today();
     const method = body?.method || "bank_transfer";
 
-    // Optional contract link — snapshot its number/tenant.
+    // Optional installment link(s) — the voucher also records a collection
+    // against each, so a deposit/fee/rent collected this way reflects its real
+    // collected/remaining figures (no orphaned "paid but collected = 0").
+    const payIds: number[] = Array.isArray(body?.paymentIds)
+      ? body.paymentIds.map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n))
+      : (body?.paymentId ? [Number(body.paymentId)] : []);
+
+    // Optional contract link — snapshot its number/tenant. Fall back to the
+    // contract of the first linked installment when not given explicitly.
     let contractId: number | null = body?.contractId ?? null;
     let tenantName: string | null = body?.tenantName ?? null;
     let tenantId: number | null = body?.tenantId ?? null;
@@ -289,6 +349,11 @@ class SimpleInvoicesController {
       const [c] = await this.db.select({ id: contractsTable.id, tenantName: contractsTable.tenantName, tenantId: contractsTable.tenantId })
         .from(contractsTable).where(and(eq(contractsTable.id, contractId), eq(contractsTable.userId, uid)));
       if (!c) { contractId = null; } else { tenantName = tenantName || c.tenantName; tenantId = tenantId ?? c.tenantId; }
+    } else if (payIds.length) {
+      const [pay] = await this.db.select({ contractId: paymentsTable.contractId, tenantName: contractsTable.tenantName, tenantId: contractsTable.tenantId })
+        .from(paymentsTable).leftJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
+        .where(and(eq(paymentsTable.id, payIds[0]!), eq(paymentsTable.userId, uid)));
+      if (pay) { contractId = pay.contractId; tenantName = tenantName || pay.tenantName; tenantId = tenantId ?? pay.tenantId; }
     }
 
     const items = Array.isArray(body?.items) && body.items.length
@@ -308,6 +373,36 @@ class SimpleInvoicesController {
       issueDate: paidDate, paidDate, confirmedAt: new Date(),
       receiptNumber: voucher, paymentMethod: method, notes: body?.notes ?? null,
     } as any).returning();
+
+    // Record the collection against the linked installment(s), distributing the
+    // amount across their remaining balances and updating their paid status.
+    if (payIds.length) {
+      let left = amount;
+      for (const pid of payIds) {
+        if (left <= 0.01) break;
+        const [payment] = await this.db.select().from(paymentsTable)
+          .where(and(eq(paymentsTable.id, pid), eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
+        if (!payment || payment.status === "cancelled") continue;
+        const prior = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+          .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, pid));
+        const collectedBefore = round2(Number(prior[0]?.total ?? 0));
+        const totalDue = round2(Number(payment.amount));
+        const remaining = round2(totalDue - collectedBefore);
+        if (remaining <= 0.01) continue;
+        const amt = round2(Math.min(remaining, left));
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: pid, userId: uid, amount: amt.toFixed(2), collectedDate: paidDate,
+          method, receiptNumber: voucher, invoiceId: doc.id,
+          notes: body?.notes ?? `سند قبض ${voucher}`,
+        } as any);
+        const after = round2(collectedBefore + amt);
+        const status = after >= totalDue - 0.01 ? "paid" : "partially_paid";
+        await this.db.update(paymentsTable).set({
+          status, paidDate: status === "paid" ? paidDate : payment.paidDate, receiptNumber: voucher,
+        }).where(eq(paymentsTable.id, pid));
+        left = round2(left - amt);
+      }
+    }
     return doc;
   }
 

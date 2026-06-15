@@ -75,9 +75,11 @@ class ReportsController {
       if (pay.description === DEPOSIT_DESC) continue; // deposit is a held balance, not income
       collectedByContract.set(pay.contractId, round2((collectedByContract.get(pay.contractId) ?? 0) + Number(col.amount)));
     }
+    // Only APPROVED (confirmed) commission invoices count — drafts never enter
+    // the books.
     const commissionByContract = new Map<number, number>();
     for (const inv of invoices) {
-      if (inv.kind !== "commission" || inv.status === "cancelled" || inv.contractId == null) continue;
+      if (inv.kind !== "commission" || inv.status !== "confirmed" || inv.contractId == null) continue;
       commissionByContract.set(inv.contractId, round2((commissionByContract.get(inv.contractId) ?? 0) + Number(inv.total)));
     }
     const maintByContract = new Map<number, number>();
@@ -148,9 +150,12 @@ class ReportsController {
       if (!r) { r = { key, tenantId: id, tenant: name, invoiced: 0, collected: 0, balance: 0 }; tmap.set(key, r); }
       return r;
     };
-    // Invoiced = tenant rent invoices (exclude commission + cancelled).
+    // Invoiced = APPROVED tenant rent invoices only. Drafts never enter the
+    // statement, and credit/debit notes are skipped here because an approved
+    // note already adjusted its parent invoice's total — counting the parent
+    // alone reflects the net (no double counting).
     for (const inv of invoices) {
-      if (inv.kind === "commission" || inv.status === "cancelled") continue;
+      if (inv.kind === "commission" || inv.type !== "invoice" || inv.status !== "confirmed") continue;
       const name = inv.tenantName || (inv.tenantId != null ? tenantById.get(inv.tenantId)?.name : null) || "—";
       const r = ensureT(inv.tenantId ?? null, name);
       r.invoiced = round2(r.invoiced + Number(inv.total));
