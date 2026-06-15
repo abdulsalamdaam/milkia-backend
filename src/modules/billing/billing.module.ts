@@ -78,10 +78,16 @@ class SimpleInvoicesController {
     else if (type) conds.push(eq(simpleInvoicesTable.type, type as any));
     if (status) conds.push(eq(simpleInvoicesTable.status, status as any));
     if (contractIds && contractIds.length > 0) conds.push(inArray(simpleInvoicesTable.contractId, contractIds) as any);
-    // Hide deposit vouchers from the Invoices tab (they're receipt vouchers,
-    // surfaced under Collections / Receipt Vouchers, not tax invoices).
-    const excludeDeposit = rawQuery?.excludeDeposit === "true" || rawQuery?.excludeDeposit === true;
-    if (excludeDeposit) conds.push(or(isNull(simpleInvoicesTable.kind), ne(simpleInvoicesTable.kind, "deposit")) as any);
+    // Hide vouchers (deposit + receipt) from the Invoices / Collections views —
+    // they're evidence documents shown under Receipt Vouchers, never tax
+    // invoices and never collectible.
+    const excludeVouchers = rawQuery?.excludeVouchers === "true" || rawQuery?.excludeVouchers === true
+      || rawQuery?.excludeDeposit === "true" || rawQuery?.excludeDeposit === true;
+    const notVoucherCond = or(
+      isNull(simpleInvoicesTable.kind),
+      and(ne(simpleInvoicesTable.kind, "deposit"), ne(simpleInvoicesTable.kind, "receipt")),
+    );
+    if (excludeVouchers) conds.push(notVoucherCond as any);
     if (q.search) {
       conds.push(or(
         ilike(simpleInvoicesTable.number, `%${q.search}%`),
@@ -95,7 +101,7 @@ class SimpleInvoicesController {
     if (types) statsConds.push(inArray(simpleInvoicesTable.type, types as any));
     else if (type) statsConds.push(eq(simpleInvoicesTable.type, type as any));
     if (contractIds && contractIds.length > 0) statsConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
-    if (excludeDeposit) statsConds.push(or(isNull(simpleInvoicesTable.kind), ne(simpleInvoicesTable.kind, "deposit")) as any);
+    if (excludeVouchers) statsConds.push(notVoucherCond as any);
     const statsWhere = and(...statsConds);
 
     const [rows, totalRow, statsRows] = await Promise.all([
@@ -368,7 +374,7 @@ class SimpleInvoicesController {
     const voucher = `RV-${String(Number(rvCount ?? 0) + 1).padStart(6, "0")}`;
 
     const [doc] = await this.db.insert(simpleInvoicesTable).values({
-      userId: uid, number, type: "invoice", status: "confirmed",
+      userId: uid, number, type: "invoice", kind: body?.kind ?? "receipt", status: "confirmed",
       contractId: contractId ?? null, tenantId: tenantId ?? null, tenantName: tenantName ?? null,
       client: body?.client ?? null, items,
       subtotal: subtotal.toFixed(2), total: amount.toFixed(2),

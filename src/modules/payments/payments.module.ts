@@ -268,6 +268,9 @@ class PaymentsController {
     ];
     if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s), ilike(contractsTable.contractNumber, s)));
     if (contractIds && contractIds.length > 0) invConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
+    // Vouchers (deposit / receipt) are evidence, not collections — keep them out
+    // of the Collections tab; they live under Receipt Vouchers.
+    invConds.push(or(isNull(simpleInvoicesTable.kind), and(ne(simpleInvoicesTable.kind, "deposit"), ne(simpleInvoicesTable.kind, "receipt"))));
     const freeInvoices = await this.db
       .select({
         id: simpleInvoicesTable.id,
