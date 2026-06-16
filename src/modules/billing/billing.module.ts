@@ -382,10 +382,10 @@ class SimpleInvoicesController {
     // it never consumes an INV-#### sequence.
     const number = voucher;
 
-    // "Include as collection?" — when true the voucher counts in Collections
-    // (kind = null, so it surfaces as a confirmed collection); when false it's
-    // evidence only (kind = "receipt"), shown solely under Receipt Vouchers.
-    const voucherKind = body?.kind ?? (body?.countAsCollection ? null : "receipt");
+    // A voucher document is always kind = "receipt" (evidence). Whether it also
+    // counts as a collection is decided by recording an actual payment-collection
+    // below, NOT by the kind — so it never leaks into the Invoices list.
+    const voucherKind = body?.kind ?? "receipt";
     const [doc] = await this.db.insert(simpleInvoicesTable).values({
       userId: uid, number, type: "invoice", kind: voucherKind, status: "confirmed",
       contractId: contractId ?? null, tenantId: tenantId ?? null, tenantName: tenantName ?? null,
@@ -423,6 +423,15 @@ class SimpleInvoicesController {
         }).where(eq(paymentsTable.id, pid));
         left = round2(left - amt);
       }
+    } else if (body?.countAsCollection) {
+      // "Add collection" (not tied to an installment): record a real collection
+      // against the voucher so it appears and counts in the Collections tab —
+      // the voucher itself is the evidence (سند قبض).
+      await this.db.insert(paymentCollectionsTable).values({
+        paymentId: null, userId: uid, amount: amount.toFixed(2), collectedDate: paidDate,
+        method, receiptNumber: voucher, invoiceId: doc.id,
+        notes: body?.notes ?? `سند قبض ${voucher}`,
+      } as any);
     }
     return doc;
   }
