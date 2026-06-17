@@ -336,16 +336,34 @@ class PaymentsController {
         invoiceNumber: iv.number,
       })),
     ];
+    // Collapse multi-installment collections: an invoice with rent + fees is
+    // collected across one payment_collection per installment, all sharing the
+    // same invoice and receipt voucher. Since the user issued ONE invoice (and
+    // ONE voucher), show ONE collection row with the combined amount. Rows
+    // without both an invoice and a receipt number stay individual.
+    const groups = new Map<string, typeof merged[number]>();
+    for (const r of merged) {
+      const key = r.invoiceId != null && r.receiptNumber ? `inv:${r.invoiceId}|rv:${r.receiptNumber}` : `row:${r.id}`;
+      const existing = groups.get(key);
+      if (!existing) {
+        groups.set(key, { ...r });
+      } else {
+        existing.amount = round2(Number(existing.amount ?? 0) + Number(r.amount ?? 0)).toFixed(2) as any;
+        if (!existing.attachmentKey && r.attachmentKey) existing.attachmentKey = r.attachmentKey;
+      }
+    }
+    const grouped = Array.from(groups.values());
+
     // Newest first by creation time.
-    merged.sort((a, b) => {
+    grouped.sort((a, b) => {
       const da = new Date(a.createdAt || a.collectedDate || 0).getTime();
       const db = new Date(b.createdAt || b.collectedDate || 0).getTime();
       return q.order === "asc" ? da - db : db - da;
     });
 
-    const total = merged.length;
-    const totalCollected = round2(merged.reduce((acc, r) => acc + Number(r.amount ?? 0), 0));
-    const pageRows = merged.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
+    const total = grouped.length;
+    const totalCollected = round2(grouped.reduce((acc, r) => acc + Number(r.amount ?? 0), 0));
+    const pageRows = grouped.slice((q.page - 1) * q.pageSize, q.page * q.pageSize);
     return {
       data: pageRows, page: q.page, pageSize: q.pageSize, total,
       stats: { totalCollected, count: total },
