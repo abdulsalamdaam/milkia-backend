@@ -6,10 +6,10 @@ import {
 import { FileInterceptor } from "@nestjs/platform-express";
 import { ApiTags, ApiBearerAuth, ApiConsumes } from "@nestjs/swagger";
 import { Throttle } from "@nestjs/throttler";
-import { and, desc, eq, inArray, isNull, or, ilike, count } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, ilike, count } from "drizzle-orm";
 import {
   paymentConfirmationsTable, paymentsTable, contractsTable, contractUnitsTable,
-  tenantsTable, unitsTable, propertiesTable, notificationsTable,
+  tenantsTable, unitsTable, propertiesTable, notificationsTable, simpleInvoicesTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -24,6 +24,14 @@ import { CurrentTenant } from "../../common/decorators/current-tenant.decorator"
 import { UploadsService } from "../uploads/uploads.service";
 
 const METHODS = ["bank_transfer", "cash", "cheque", "other"] as const;
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+/** Next INV-###### number for an account (mirrors the billing module). */
+async function nextInvoiceNumber(db: Drizzle, userId: number): Promise<string> {
+  const [row] = await db.select({ c: count() }).from(simpleInvoicesTable)
+    .where(and(eq(simpleInvoicesTable.userId, userId), eq(simpleInvoicesTable.type, "invoice")));
+  return `INV-${String(Number(row?.c ?? 0) + 1).padStart(6, "0")}`;
+}
 
 /* ─────────────── Tenant side — submit & track ─────────────── */
 
@@ -316,14 +324,48 @@ export class PaymentConfirmationsController {
       .where(eq(paymentConfirmationsTable.id, row.id))
       .returning();
 
-    // Approving the request settles the underlying installment.
+    // Approving the request starts the billing cycle: it creates a DRAFT invoice
+    // for the installment (carrying the tenant's proof) instead of marking the
+    // installment paid directly. The landlord then continues the normal flow —
+    // approve the invoice → collect → receipt voucher — which settles it.
     if (body.status === "approved") {
-      await this.db.update(paymentsTable)
-        .set({ status: "paid", paidDate: new Date().toISOString().slice(0, 10) })
+      const uid = scopeId(user);
+      const [payment] = await this.db.select().from(paymentsTable)
+        .where(and(eq(paymentsTable.id, row.paymentId), eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
+      // Don't double-invoice: skip if this installment already has a live invoice.
+      const [existingInv] = await this.db.select({ id: simpleInvoicesTable.id }).from(simpleInvoicesTable)
         .where(and(
-          eq(paymentsTable.id, row.paymentId),
-          eq(paymentsTable.userId, scopeId(user)),
+          eq(simpleInvoicesTable.userId, uid),
+          eq(simpleInvoicesTable.paymentId, row.paymentId),
+          ne(simpleInvoicesTable.status, "cancelled"),
+          isNull(simpleInvoicesTable.deletedAt),
         ));
+      if (payment && !existingInv) {
+        const [contract] = await this.db
+          .select({ tenantName: contractsTable.tenantName, tenantId: contractsTable.tenantId })
+          .from(contractsTable).where(eq(contractsTable.id, row.contractId));
+        const amount = round2(Number(payment.amount));
+        const items = [{ description: payment.description || "إيجار", quantity: 1, unitPrice: amount, amount, vat: false }];
+        await this.db.insert(simpleInvoicesTable).values({
+          userId: uid,
+          number: await nextInvoiceNumber(this.db, uid),
+          type: "invoice",
+          status: "draft",
+          contractId: row.contractId,
+          paymentId: row.paymentId,
+          paymentIds: [row.paymentId],
+          tenantId: contract?.tenantId ?? row.tenantId,
+          tenantName: contract?.tenantName ?? null,
+          items,
+          subtotal: amount.toFixed(2),
+          total: amount.toFixed(2),
+          issueDate: new Date().toISOString().slice(0, 10),
+          // Carry the tenant's payment proof onto the invoice so the landlord
+          // sees it through to collection.
+          attachmentKey: row.proofKey ?? null,
+          notes: `من تأكيد دفع${row.reference ? ` · ${row.reference}` : ""}`,
+        } as any);
+      }
     }
 
     // Notify the tenant of the landlord's decision — in-app row + push to the
@@ -338,7 +380,7 @@ export class PaymentConfirmationsController {
         type: approved ? "payment_approved" : "payment_rejected",
         title: approved ? "تم اعتماد الدفعة" : "تم رفض طلب الدفع",
         body: approved
-          ? `تم اعتماد دفعتك بمبلغ ${amount} ر.س وتسجيلها كمسددة.`
+          ? `تم اعتماد دفعتك بمبلغ ${amount} ر.س وجارٍ إصدار الفاتورة وتحصيلها.`
           : `تم رفض طلب تأكيد الدفع بمبلغ ${amount} ر.س.${note ? ` السبب: ${note}` : ""}`,
         data: { paymentId: row.paymentId, confirmationId: row.id },
       });
