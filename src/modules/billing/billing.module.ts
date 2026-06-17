@@ -3,7 +3,7 @@ import {
   BadRequestException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns } from "drizzle-orm";
+import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTableColumns, sql } from "drizzle-orm";
 import {
   simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
@@ -46,13 +46,25 @@ function normalizeItems(raw: any): LineItem[] {
 class SimpleInvoicesController {
   constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
 
-  /** Next document number for a type, e.g. INV-000123 / CRN-000005 / DBN-000002. */
-  private async nextNumber(userId: number, type: string): Promise<string> {
+  /**
+   * Next document number for a type, e.g. INV-000123 / CRN-000005 / DBN-000002.
+   *
+   * Uses MAX(sequence)+1 for THIS prefix (not COUNT): isolates INV- from the
+   * RV-/COM- docs that also live in this table as type=invoice, and stays unique
+   * even after a draft in the middle is deleted. MUST be called inside the
+   * advisory-locked transaction in `create` so concurrent creations (e.g. a rent
+   * + a fee invoice fired together) can't read the same max and collide.
+   */
+  private async nextNumber(tx: any, userId: number, type: string): Promise<string> {
     const prefix = type === "credit" ? "CRN" : type === "debit" ? "DBN" : "INV";
-    const [row] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.userId, userId), eq(simpleInvoicesTable.type, type as any)));
-    const seq = Number(row?.c ?? 0) + 1;
-    return `${prefix}-${String(seq).padStart(6, "0")}`;
+    const res: any = await tx.execute(sql`
+      select coalesce(max(cast(substring(${simpleInvoicesTable.number} from '[0-9]+$') as integer)), 0) as m
+      from ${simpleInvoicesTable}
+      where ${simpleInvoicesTable.userId} = ${userId} and ${simpleInvoicesTable.number} like ${prefix + "-%"}
+    `);
+    const rows = Array.isArray(res) ? res : (res?.rows ?? []);
+    const max = Number(rows?.[0]?.m ?? 0);
+    return `${prefix}-${String(max + 1).padStart(6, "0")}`;
   }
 
   @Get()
@@ -157,7 +169,8 @@ class SimpleInvoicesController {
     const items = normalizeItems(body?.items);
     const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
     const total = body?.total != null ? round2(Number(body.total)) : subtotal;
-    const number = (body?.number && String(body.number).trim()) || (await this.nextNumber(scopeId(user), type));
+    // An explicit number wins; otherwise it's generated atomically below.
+    const explicitNumber = (body?.number && String(body.number).trim()) || null;
 
     // If linked to an installment, snapshot tenant/contract from it.
     let contractId = body?.contractId ?? null;
@@ -211,26 +224,37 @@ class SimpleInvoicesController {
       }
     }
 
-    const [doc] = await this.db.insert(simpleInvoicesTable).values({
-      userId: scopeId(user),
-      number,
-      type,
-      status: "draft",
-      contractId: contractId ?? null,
-      paymentId: body?.paymentId ?? (paymentIds[0] ?? null),
-      paymentIds: paymentIds.length ? paymentIds : null,
-      tenantId: tenantId ?? null,
-      tenantName: tenantName ?? null,
-      client: client ?? null,
-      items,
-      subtotal: subtotal.toFixed(2),
-      total: total.toFixed(2),
-      kind: body?.kind ?? null,
-      issueDate: body?.issueDate || today(),
-      dueDate: body?.dueDate || null,
-      billingReference: body?.billingReference ?? null,
-      notes: body?.notes ?? null,
-    } as any).returning();
+    // Generate the number + insert inside ONE transaction guarded by a per
+    // (account, doc-type) advisory lock, so two invoices created at the same
+    // moment (e.g. a rent invoice and a fee invoice for the same installment)
+    // can't read the same MAX and end up with the same number. The lock is
+    // released automatically when the transaction commits.
+    const uid = scopeId(user);
+    const typeKey = type === "credit" ? 2 : type === "debit" ? 3 : 1;
+    const [doc] = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(${uid}, ${typeKey})`);
+      const number = explicitNumber || (await this.nextNumber(tx, uid, type));
+      return tx.insert(simpleInvoicesTable).values({
+        userId: uid,
+        number,
+        type,
+        status: "draft",
+        contractId: contractId ?? null,
+        paymentId: body?.paymentId ?? (paymentIds[0] ?? null),
+        paymentIds: paymentIds.length ? paymentIds : null,
+        tenantId: tenantId ?? null,
+        tenantName: tenantName ?? null,
+        client: client ?? null,
+        items,
+        subtotal: subtotal.toFixed(2),
+        total: total.toFixed(2),
+        kind: body?.kind ?? null,
+        issueDate: body?.issueDate || today(),
+        dueDate: body?.dueDate || null,
+        billingReference: body?.billingReference ?? null,
+        notes: body?.notes ?? null,
+      } as any).returning();
+    });
 
     // NB: the paired commission invoice is NOT created here — it's spawned only
     // when this rent invoice is APPROVED (see approve()), so a commission never
