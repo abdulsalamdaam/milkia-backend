@@ -609,8 +609,11 @@ class ContractsController {
   async remove(@CurrentUser() user: AuthUser, @Param("contractId") contractId: string, @Query("mode") mode?: string) {
     const id = parseInt(contractId, 10);
     const now = new Date();
+    // Cancelling the unpaid installments cancels the contract; otherwise it's a
+    // normal termination.
+    const endStatus = mode === "cancelled" ? "cancelled" : "terminated";
     const [contract] = await this.db.update(contractsTable)
-      .set({ status: "terminated" })
+      .set({ status: endStatus })
       .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, scopeId(user)), isNull(contractsTable.deletedAt)))
       .returning();
     if (!contract) throw new NotFoundException("Contract not found");
@@ -734,9 +737,12 @@ class ContractsController {
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const today = new Date().toISOString().slice(0, 10);
     const mode = body?.mode as string | undefined;
+    // Cancelling the unpaid installments cancels the contract; otherwise it's a
+    // normal termination.
+    const endStatus = mode === "cancelled" ? "cancelled" : "terminated";
 
     const [contract] = await this.db.update(contractsTable)
-      .set({ status: "terminated" })
+      .set({ status: endStatus })
       .where(and(eq(contractsTable.id, id), eq(contractsTable.userId, ownerId), isNull(contractsTable.deletedAt)))
       .returning();
     if (!contract) throw new NotFoundException("Contract not found");

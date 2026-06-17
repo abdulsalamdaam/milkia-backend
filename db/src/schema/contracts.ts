@@ -4,7 +4,7 @@ import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { tenantsTable } from "./tenants";
 
-export const contractStatusEnum = pgEnum("contract_status", ["active", "expired", "terminated", "pending"]);
+export const contractStatusEnum = pgEnum("contract_status", ["active", "expired", "terminated", "cancelled", "pending"]);
 export const paymentFrequencyEnum = pgEnum("payment_frequency", ["monthly", "quarterly", "semi_annual", "annual", "custom"]);
 
 export const contractsTable = pgTable("contracts", {
