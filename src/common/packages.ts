@@ -132,10 +132,19 @@ export const PLAN_MONTHLY_PRICE: Record<PackagePlan, number | null> = {
   enterprise: null,
 };
 
+/**
+ * TEST MODE — charge every payable plan (any cycle, initial or renewal) a flat
+ * 1 SAR so the Moyasar flow can be exercised with real money cheaply.
+ * Revert by deleting this flag / the early return below to restore real pricing.
+ */
+export const TEST_FLAT_PRICE_SAR: number | null = 1;
+
 /** Amount charged (SAR) for a plan on the given cycle, or null if on-request. */
 export function planPrice(plan: string | null | undefined, cycle: BillingCycle): number | null {
   const monthly = PLAN_MONTHLY_PRICE[resolvePackage(plan).key];
   if (monthly == null) return null;
+  // TEST MODE: flat price for any payable plan/cycle (see TEST_FLAT_PRICE_SAR).
+  if (TEST_FLAT_PRICE_SAR != null) return TEST_FLAT_PRICE_SAR;
   return cycle === "yearly" ? Math.round(monthly * (1 - YEARLY_DISCOUNT)) * 12 : monthly;
 }
 
