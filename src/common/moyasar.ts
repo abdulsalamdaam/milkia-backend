@@ -75,3 +75,17 @@ export async function fetchMoyasarInvoice(invoiceId: string): Promise<MoyasarInv
   if (!res.ok) throw new Error(`MOYASAR_FETCH_FAILED: ${res.status}`);
   return (await res.json()) as MoyasarInvoice;
 }
+
+/**
+ * Cancel (void) an unpaid invoice. Used when a user changes plan/cycle so the
+ * superseded hosted invoice can no longer be paid. A paid/non-cancellable
+ * invoice makes Moyasar 4xx — callers treat that as non-fatal.
+ */
+export async function cancelMoyasarInvoice(invoiceId: string): Promise<void> {
+  if (!isMoyasarConfigured()) throw new Error("MOYASAR_NOT_CONFIGURED");
+  const res = await fetch(`${BASE}/invoices/${invoiceId}/cancel`, {
+    method: "POST",
+    headers: { Authorization: authHeader() },
+  });
+  if (!res.ok) throw new Error(`MOYASAR_CANCEL_FAILED: ${res.status}`);
+}

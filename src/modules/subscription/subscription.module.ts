@@ -9,7 +9,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { scopeId } from "../../common/scope";
 import { resolvePackage, planPrice, isPayablePlan, isPackagePlan, type BillingCycle } from "../../common/packages";
 import { deriveSubscription } from "../../common/subscription";
-import { createMoyasarInvoice, fetchMoyasarInvoice, isMoyasarConfigured } from "../../common/moyasar";
+import { createMoyasarInvoice, fetchMoyasarInvoice, cancelMoyasarInvoice, isMoyasarConfigured } from "../../common/moyasar";
 
 const APP_PUBLIC_URL = (process.env.APP_PUBLIC_URL || "https://app.oqudk.com").replace(/\/$/, "");
 
@@ -19,6 +19,33 @@ function nextEndDate(cycle: BillingCycle, from = new Date()): Date {
   if (cycle === "yearly") d.setFullYear(d.getFullYear() + 1);
   else d.setMonth(d.getMonth() + 1);
   return d;
+}
+
+type SubscriptionPaymentRow = typeof subscriptionPaymentsTable.$inferSelect;
+
+/**
+ * Mark a pending payment row paid and open/renew its owner's subscription.
+ * Shared by the webhook (normal path) and the pay endpoint (defensive, when a
+ * user re-clicks Pay after an already-paid invoice whose webhook was missed).
+ * No-op if the row is already paid.
+ */
+async function activateFromPaidRow(db: Drizzle, row: SubscriptionPaymentRow, moyasarPaymentId?: string | null): Promise<void> {
+  if (row.status === "paid") return;
+  await db.update(subscriptionPaymentsTable)
+    .set({ status: "paid", paidAt: new Date(), moyasarPaymentId: moyasarPaymentId ?? row.moyasarPaymentId ?? null })
+    .where(eq(subscriptionPaymentsTable.id, row.id));
+  const cycle = (row.billingCycle === "yearly" ? "yearly" : "monthly") as BillingCycle;
+  const now = new Date();
+  await db.update(usersTable).set({
+    packagePlan: row.plan,
+    billingCycle: cycle,
+    // Payment confirmed → the desired selection is now the live plan.
+    desiredPackagePlan: null,
+    desiredBillingCycle: null,
+    subscriptionStatus: "active",
+    subscriptionStartedAt: now,
+    subscriptionEndsAt: nextEndDate(cycle, now),
+  }).where(eq(usersTable.id, row.userId));
 }
 
 @ApiTags("subscription")
@@ -38,12 +65,18 @@ class SubscriptionController {
     const payments = await this.db.select().from(subscriptionPaymentsTable)
       .where(eq(subscriptionPaymentsTable.userId, ownerId))
       .orderBy(desc(subscriptionPaymentsTable.createdAt));
+    // The single open invoice the user can resume (if any) — lets the UI offer
+    // "Continue payment" instead of minting a fresh link on every click.
+    const open = payments.find((p) => p.status === "pending" && !!p.paymentUrl);
     return {
       plan: resolvePackage(owner?.packagePlan).key,
       billingCycle: cycle,
       amountDue: planPrice(owner?.packagePlan, cycle),
       payable: isPayablePlan(owner?.packagePlan),
       moyasarConfigured: isMoyasarConfigured(),
+      pendingPayment: open
+        ? { id: open.id, plan: open.plan, billingCycle: open.billingCycle, amount: Number(open.amount), url: open.paymentUrl, createdAt: open.createdAt }
+        : null,
       status: sub.status,
       needsPayment: sub.needsPayment,
       locked: sub.locked,
@@ -87,7 +120,38 @@ class SubscriptionController {
       throw new BadRequestException("بوابة الدفع غير مُهيأة بعد. يرجى المحاولة لاحقاً.");
     }
 
-    // Record a pending payment, then create the Moyasar invoice referencing it.
+    // Reuse-or-replace: an account has at most one open (pending) invoice. If
+    // one already exists, decide whether to reuse, activate, or supersede it —
+    // instead of minting a duplicate on every click.
+    const [pending] = await this.db.select().from(subscriptionPaymentsTable)
+      .where(and(eq(subscriptionPaymentsTable.userId, ownerId), eq(subscriptionPaymentsTable.status, "pending")))
+      .orderBy(desc(subscriptionPaymentsTable.createdAt))
+      .limit(1);
+
+    if (pending?.moyasarInvoiceId) {
+      // Trust Moyasar for the real status (the local row may be stale).
+      let invStatus = "";
+      try { invStatus = String((await fetchMoyasarInvoice(pending.moyasarInvoiceId)).status || "").toLowerCase(); } catch { /* treat as unknown → supersede below */ }
+      const sameSelection = pending.plan === plan && pending.billingCycle === cycle && Number(pending.amount) === amount;
+
+      if (invStatus === "paid") {
+        // Already paid but the webhook hasn't landed — activate now and return.
+        await activateFromPaidRow(this.db, pending);
+        return { paymentId: pending.id, url: pending.paymentUrl, invoiceId: pending.moyasarInvoiceId, alreadyPaid: true };
+      }
+      if (invStatus === "initiated" && sameSelection) {
+        // Same plan/cycle and still payable → hand back the SAME link.
+        return { paymentId: pending.id, url: pending.paymentUrl, invoiceId: pending.moyasarInvoiceId, reused: true };
+      }
+      // Plan/cycle changed, or the invoice is failed/expired/unknown → supersede:
+      // void the old invoice (best-effort) and close the local row.
+      try { await cancelMoyasarInvoice(pending.moyasarInvoiceId); } catch { /* already paid/cancelled — non-fatal */ }
+      await this.db.update(subscriptionPaymentsTable)
+        .set({ status: invStatus === "failed" ? "failed" : "cancelled" })
+        .where(eq(subscriptionPaymentsTable.id, pending.id));
+    }
+
+    // Record a fresh pending payment, then create the Moyasar invoice referencing it.
     const [row] = await this.db.insert(subscriptionPaymentsTable).values({
       userId: ownerId, plan, billingCycle: cycle, amount: amount.toFixed(2), currency: "SAR", status: "pending",
     }).returning();
@@ -157,23 +221,8 @@ class SubscriptionWebhookController {
     if (!row) return { ok: true, unmatched: true };
     if (row.status === "paid") return { ok: true, already: true };
 
-    await this.db.update(subscriptionPaymentsTable)
-      .set({ status: "paid", paidAt: new Date(), moyasarPaymentId: paymentId ?? null })
-      .where(eq(subscriptionPaymentsTable.id, row.id));
-
-    // Activate / renew: start now, end one cycle later, clear pending state.
-    const cycle = (row.billingCycle === "yearly" ? "yearly" : "monthly") as BillingCycle;
-    const now = new Date();
-    await this.db.update(usersTable).set({
-      packagePlan: row.plan,
-      billingCycle: cycle,
-      // Payment confirmed → the desired selection is now the live plan.
-      desiredPackagePlan: null,
-      desiredBillingCycle: null,
-      subscriptionStatus: "active",
-      subscriptionStartedAt: now,
-      subscriptionEndsAt: nextEndDate(cycle, now),
-    }).where(eq(usersTable.id, row.userId));
+    // Mark paid + activate/renew (start now, end one cycle later, clear pending).
+    await activateFromPaidRow(this.db, row, paymentId ?? null);
 
     return { ok: true, activated: true };
   }
