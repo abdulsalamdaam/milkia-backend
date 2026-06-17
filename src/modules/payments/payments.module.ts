@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, notExists } from "drizzle-orm";
+import { and, eq, ne, isNull, isNotNull, or, ilike, count, asc, desc, sum, inArray, notExists } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import { paymentsTable, paymentCollectionsTable, contractsTable, tenantsTable, simpleInvoicesTable } from "@oqudk/database";
 
@@ -278,6 +278,11 @@ class PaymentsController {
       eq(simpleInvoicesTable.type, "invoice"),
       isNull(simpleInvoicesTable.paymentId),
       isNull(simpleInvoicesTable.deletedAt),
+      // Only invoices that were actually collected (paidDate set) belong in the
+      // Collections list. A confirmed-but-uncollected invoice (e.g. an approved
+      // commission invoice) has no paidDate and must NOT show here as collected
+      // — it stays in the "awaiting collection" list until it's collected.
+      isNotNull(simpleInvoicesTable.paidDate),
     ];
     if (s) invConds.push(or(ilike(simpleInvoicesTable.receiptNumber, s), ilike(simpleInvoicesTable.tenantName, s), ilike(simpleInvoicesTable.number, s), ilike(contractsTable.contractNumber, s)));
     if (contractIds && contractIds.length > 0) invConds.push(inArray(simpleInvoicesTable.contractId, contractIds));
