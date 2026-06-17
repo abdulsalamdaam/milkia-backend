@@ -120,35 +120,39 @@ class SubscriptionController {
       throw new BadRequestException("بوابة الدفع غير مُهيأة بعد. يرجى المحاولة لاحقاً.");
     }
 
-    // Reuse-or-replace: an account has at most one open (pending) invoice. If
-    // one already exists, decide whether to reuse, activate, or supersede it —
-    // instead of minting a duplicate on every click.
-    const [pending] = await this.db.select().from(subscriptionPaymentsTable)
+    // Reuse-or-replace: an account keeps at most ONE open invoice. Walk every
+    // pending row (not just the latest — old ones can pile up), reuse a still-
+    // open invoice that matches this exact selection, and supersede the rest.
+    const pendings = await this.db.select().from(subscriptionPaymentsTable)
       .where(and(eq(subscriptionPaymentsTable.userId, ownerId), eq(subscriptionPaymentsTable.status, "pending")))
-      .orderBy(desc(subscriptionPaymentsTable.createdAt))
-      .limit(1);
+      .orderBy(desc(subscriptionPaymentsTable.createdAt));
 
-    if (pending?.moyasarInvoiceId) {
-      // Trust Moyasar for the real status (the local row may be stale).
-      let invStatus = "";
-      try { invStatus = String((await fetchMoyasarInvoice(pending.moyasarInvoiceId)).status || "").toLowerCase(); } catch { /* treat as unknown → supersede below */ }
-      const sameSelection = pending.plan === plan && pending.billingCycle === cycle && Number(pending.amount) === amount;
-
+    let reuse: typeof pendings[number] | null = null;
+    for (const p of pendings) {
+      const invStatus = p.moyasarInvoiceId
+        ? await fetchMoyasarInvoice(p.moyasarInvoiceId).then((i) => String(i.status || "").toLowerCase()).catch(() => "")
+        : "";
       if (invStatus === "paid") {
         // Already paid but the webhook hasn't landed — activate now and return.
-        await activateFromPaidRow(this.db, pending);
-        return { paymentId: pending.id, url: pending.paymentUrl, invoiceId: pending.moyasarInvoiceId, alreadyPaid: true };
+        await activateFromPaidRow(this.db, p);
+        return { paymentId: p.id, url: p.paymentUrl, invoiceId: p.moyasarInvoiceId, alreadyPaid: true };
       }
-      if (invStatus === "initiated" && sameSelection) {
-        // Same plan/cycle and still payable → hand back the SAME link.
-        return { paymentId: pending.id, url: pending.paymentUrl, invoiceId: pending.moyasarInvoiceId, reused: true };
+      const sameSelection = p.plan === plan && p.billingCycle === cycle && Number(p.amount) === amount;
+      if (!reuse && invStatus === "initiated" && sameSelection) {
+        // First (newest) still-open invoice for the same selection → reuse it.
+        reuse = p;
+        continue;
       }
-      // Plan/cycle changed, or the invoice is failed/expired/unknown → supersede:
-      // void the old invoice (best-effort) and close the local row.
-      try { await cancelMoyasarInvoice(pending.moyasarInvoiceId); } catch { /* already paid/cancelled — non-fatal */ }
+      // Anything else (different selection, duplicate, failed/expired/unknown) →
+      // void the Moyasar invoice (best-effort) and close the local row.
+      if (p.moyasarInvoiceId) { try { await cancelMoyasarInvoice(p.moyasarInvoiceId); } catch { /* already paid/cancelled — non-fatal */ } }
       await this.db.update(subscriptionPaymentsTable)
         .set({ status: invStatus === "failed" ? "failed" : "cancelled" })
-        .where(eq(subscriptionPaymentsTable.id, pending.id));
+        .where(eq(subscriptionPaymentsTable.id, p.id));
+    }
+    if (reuse) {
+      // Same plan/cycle and still payable → hand back the SAME link.
+      return { paymentId: reuse.id, url: reuse.paymentUrl, invoiceId: reuse.moyasarInvoiceId, reused: true };
     }
 
     // Record a fresh pending payment, then create the Moyasar invoice referencing it.
