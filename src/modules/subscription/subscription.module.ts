@@ -77,8 +77,11 @@ class SubscriptionController {
     const amount = planPrice(plan, cycle);
     if (!amount || amount <= 0) throw new BadRequestException("تعذّر تحديد قيمة الاشتراك");
 
-    // Persist the chosen plan/cycle so activation renews the right thing.
-    await this.db.update(usersTable).set({ packagePlan: plan, billingCycle: cycle }).where(eq(usersTable.id, ownerId));
+    // Record the chosen plan/cycle as the DESIRED selection only — do NOT touch
+    // the live package yet. The pending payment row below carries the choice,
+    // and the webhook applies it once payment is actually confirmed. This stops
+    // a click on "Pay" from upgrading/switching a user who never paid.
+    await this.db.update(usersTable).set({ desiredPackagePlan: plan, desiredBillingCycle: cycle }).where(eq(usersTable.id, ownerId));
 
     if (!isMoyasarConfigured()) {
       throw new BadRequestException("بوابة الدفع غير مُهيأة بعد. يرجى المحاولة لاحقاً.");
@@ -164,6 +167,9 @@ class SubscriptionWebhookController {
     await this.db.update(usersTable).set({
       packagePlan: row.plan,
       billingCycle: cycle,
+      // Payment confirmed → the desired selection is now the live plan.
+      desiredPackagePlan: null,
+      desiredBillingCycle: null,
       subscriptionStatus: "active",
       subscriptionStartedAt: now,
       subscriptionEndsAt: nextEndDate(cycle, now),

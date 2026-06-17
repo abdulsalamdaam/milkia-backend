@@ -345,6 +345,7 @@ class SimpleInvoicesController {
     if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException("المبلغ غير صالح");
     const paidDate = body?.paidDate || today();
     const method = body?.method || "bank_transfer";
+    const attachmentKey = body?.attachmentKey ?? null;
 
     // Optional installment link(s) — the voucher also records a collection
     // against each, so a deposit/fee/rent collected this way reflects its real
@@ -393,6 +394,7 @@ class SimpleInvoicesController {
       subtotal: subtotal.toFixed(2), total: amount.toFixed(2),
       issueDate: paidDate, paidDate, confirmedAt: new Date(),
       receiptNumber: voucher, paymentMethod: method, notes: body?.notes ?? null,
+      attachmentKey,
     } as any).returning();
 
     // Record the collection against the linked installment(s), distributing the
@@ -413,7 +415,7 @@ class SimpleInvoicesController {
         const amt = round2(Math.min(remaining, left));
         await this.db.insert(paymentCollectionsTable).values({
           paymentId: pid, userId: uid, amount: amt.toFixed(2), collectedDate: paidDate,
-          method, receiptNumber: voucher, invoiceId: doc.id,
+          method, receiptNumber: voucher, invoiceId: doc.id, attachmentKey,
           notes: body?.notes ?? `سند قبض ${voucher}`,
         } as any);
         const after = round2(collectedBefore + amt);
@@ -429,7 +431,7 @@ class SimpleInvoicesController {
       // the voucher itself is the evidence (سند قبض).
       await this.db.insert(paymentCollectionsTable).values({
         paymentId: null, userId: uid, amount: amount.toFixed(2), collectedDate: paidDate,
-        method, receiptNumber: voucher, invoiceId: doc.id,
+        method, receiptNumber: voucher, invoiceId: doc.id, attachmentKey,
         notes: body?.notes ?? `سند قبض ${voucher}`,
       } as any);
     }
