@@ -13,6 +13,7 @@ function parseRentTerms(raw: any): { year: number; amount: number }[] {
     .filter((t) => Number.isFinite(t.year) && t.year > 0 && Number.isFinite(t.amount) && t.amount > 0);
 }
 import { listQuerySchema } from "../../common/pagination";
+import { nextReceiptVoucherNumber } from "../../common/receipt-number";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -367,9 +368,14 @@ class ContractsController {
 
     // Advance/prepaid rent → record as a collection on the earliest rent
     // installments (keeps full amount; flips them to paid / partially_paid).
+    // The advance carries its OWN receipt-voucher number so it shows in the
+    // Collections tab as a distinct سند القبض — the later collection of the
+    // remaining balance produces a second voucher. (Hence: with advance rent
+    // there are two receipt vouchers for the rent — advance + remainder.)
     const prepaid = round2(Number(body.prepaidRent) || 0);
     if (prepaid > 0 && inserted.length > 0) {
       const method = body.prepaidMethod || "bank_transfer";
+      const advanceVoucher = await this.nextReceiptNumber(ownerId);
       const rentRows = inserted.filter((p) => !p.description)
         .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
       let left = prepaid;
@@ -379,7 +385,8 @@ class ContractsController {
         const amt = round2(Math.min(left, full));
         await this.db.insert(paymentCollectionsTable).values({
           paymentId: p.id, userId: ownerId, amount: amt.toFixed(2),
-          collectedDate: startDay, method, notes: "إيجار مدفوع مقدماً",
+          collectedDate: startDay, method, receiptNumber: advanceVoucher,
+          notes: "إيجار مدفوع مقدماً",
         } as any);
         const fully = amt >= full - 0.01;
         await this.db.update(paymentsTable)
@@ -405,9 +412,7 @@ class ContractsController {
 
   /** Next per-account receipt-voucher (سند قبض) number: RV-000001, … */
   private async nextReceiptNumber(ownerId: number): Promise<string> {
-    const [row] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.userId, ownerId), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
-    return `RV-${String(Number(row?.c ?? 0) + 1).padStart(6, "0")}`;
+    return nextReceiptVoucherNumber(this.db, ownerId);
   }
 
   /**

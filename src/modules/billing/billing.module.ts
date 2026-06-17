@@ -9,6 +9,7 @@ import {
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
 } from "@oqudk/database";
 import { listQuerySchema } from "../../common/pagination";
+import { nextReceiptVoucherNumber } from "../../common/receipt-number";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -400,9 +401,7 @@ class SimpleInvoicesController {
       ? normalizeItems(body.items)
       : [{ description: String(body?.description || "سند قبض").trim(), quantity: 1, unitPrice: amount, amount, vat: false }];
     const subtotal = round2(items.reduce((s, it) => s + it.amount, 0));
-    const [{ c: rvCount }] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
-    const voucher = `RV-${String(Number(rvCount ?? 0) + 1).padStart(6, "0")}`;
+    const voucher = await nextReceiptVoucherNumber(this.db, uid);
     // A receipt voucher is NOT an invoice — its document number IS the RV number;
     // it never consumes an INV-#### sequence.
     const number = voucher;
@@ -606,11 +605,9 @@ class SimpleInvoicesController {
     // presence of a paid stamp.
 
     const paidDate = body?.paidDate || today();
-    // Per-account sequential receipt-voucher number (RV-000001…) — count the
-    // vouchers already issued for this account, not the global invoice id.
-    const [rvCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, "RV-%")));
-    const voucher = `RV-${String(Number(rvCount?.c ?? 0) + 1).padStart(6, "0")}`;
+    // Per-account sequential receipt-voucher number (RV-000001…), unique across
+    // both invoice docs and collections (e.g. the advance-rent voucher).
+    const voucher = await nextReceiptVoucherNumber(this.db, uid);
     const method = body?.method ?? "bank_transfer";
     const receipt = (body?.receiptNumber && String(body.receiptNumber).trim()) || voucher;
     const ids = (doc.paymentIds && doc.paymentIds.length) ? doc.paymentIds : (doc.paymentId ? [doc.paymentId] : []);

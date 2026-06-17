@@ -235,10 +235,10 @@ class PaymentsController {
     // Legacy deposit collections (on a deposit payment row) are not revenue —
     // exclude them; the deposit shows once, as its receipt voucher (section 2).
     collConds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
-    // Advance/prepaid rent is applied to the rent invoice, not shown as its own
-    // collection — so an advance-paid invoice has ONE collection row (the actual
-    // collect), not two (advance + remainder).
-    collConds.push(or(isNull(paymentCollectionsTable.notes), ne(paymentCollectionsTable.notes, ADVANCE_NOTE)));
+    // Advance/prepaid rent IS real money received — show it as its own collection
+    // row (it carries its own receipt-voucher number). When the rent invoice is
+    // later collected, the remaining balance produces a second voucher, so an
+    // advance-paid rent shows two receipt vouchers (advance + remainder).
     // For invoice-only collections (no installment, e.g. a collected commission
     // invoice) the contract/tenant come from the invoice, not the payment.
     const invContract = alias(contractsTable, "inv_contract");
