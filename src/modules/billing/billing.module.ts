@@ -482,11 +482,6 @@ class SimpleInvoicesController {
     const isNote = doc.type === "credit" || doc.type === "debit";
     if (isNote) {
       const sign = doc.type === "credit" ? -1 : 1;
-      // Per-account sequential note voucher (CN-000001 / DN-000001).
-      const notePrefix = doc.type === "credit" ? "CN" : "DN";
-      const [nCount] = await this.db.select({ c: count() }).from(simpleInvoicesTable)
-        .where(and(eq(simpleInvoicesTable.userId, uid), ilike(simpleInvoicesTable.receiptNumber, `${notePrefix}-%`)));
-      const voucher = `${notePrefix}-${String(Number(nCount?.c ?? 0) + 1).padStart(6, "0")}`;
       if (doc.billingReference) {
         const [refInv] = await this.db.select().from(simpleInvoicesTable)
           .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "invoice"),
@@ -539,8 +534,12 @@ class SimpleInvoicesController {
           }
         }
       }
+      // A note keeps its own document number (CRN-/DBN-). It is NOT a receipt
+      // voucher, so it must never get a receiptNumber — that column is only for
+      // collected money / RV vouchers, and a CN-/DN- there leaks into the
+      // Receipt column as if the note were a collection.
       const [updated] = await this.db.update(simpleInvoicesTable).set({
-        status: "confirmed", confirmedAt: new Date(), receiptNumber: voucher,
+        status: "confirmed", confirmedAt: new Date(),
       }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
       return updated;
     }
