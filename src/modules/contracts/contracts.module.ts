@@ -380,6 +380,7 @@ class ContractsController {
       const rentRows = inserted.filter((p) => !p.description)
         .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
       let left = prepaid;
+      let applied = 0;
       for (const p of rentRows) {
         if (left <= 0.01) break;
         const full = round2(Number(p.amount));
@@ -394,6 +395,22 @@ class ContractsController {
           .set({ status: fully ? "paid" : "partially_paid", paidDate: fully ? startDay : null })
           .where(eq(paymentsTable.id, p.id));
         left = round2(left - amt);
+        applied = round2(applied + amt);
+      }
+      // Advance receipt-voucher DOCUMENT (kind="receipt") so the advance shows in
+      // the Receipt Vouchers page too — it shares the RV number stamped on the
+      // collection(s) above. Not linked to an installment (the collection is),
+      // so it doesn't double-count in collections.
+      if (applied > 0.01) {
+        const c = contract!;
+        await this.db.insert(simpleInvoicesTable).values({
+          userId: ownerId, number: advanceVoucher, type: "invoice", kind: "receipt", status: "confirmed",
+          contractId: c.id, tenantId: c.tenantId ?? null, tenantName: c.tenantName ?? null,
+          items: [{ description: "إيجار مدفوع مقدماً", quantity: 1, unitPrice: applied, amount: applied, vat: false }],
+          subtotal: applied.toFixed(2), total: applied.toFixed(2),
+          issueDate: startDay, paidDate: startDay, confirmedAt: new Date(),
+          receiptNumber: advanceVoucher, paymentMethod: method, notes: "إيجار مدفوع مقدماً",
+        } as any);
       }
     }
 
