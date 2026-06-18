@@ -69,12 +69,15 @@ class ReportsController {
     const invoiceById = new Map(invoices.map((i) => [i.id, i]));
 
     // Per-contract aggregates.
-    // Deposit vouchers normally hold trust money (no collection). When a deposit
-    // is "taken as a collection for the landlord" on termination, a real
-    // collection is recorded against the deposit voucher — those (and only
-    // those) count as collected income for the contract, and the deposit is
-    // then NOT shown as a held balance (see the tenant deposit loop below).
-    const collectedByContract = new Map<number, number>(); // rent + fees + converted deposits, net of refunds
+    // `collectedByContract` is RENT/fees only — it drives both the tenant's
+    // "collected" (against rent invoices) and the landlord's rent collected, so
+    // the deposit must NOT be mixed in here (it isn't rent and would corrupt the
+    // tenant balance). The security deposit is the tenant's held balance; only
+    // when it's "taken as a collection for the landlord" on termination (a real
+    // collection recorded against the deposit voucher) does it move to the
+    // landlord — tracked separately so it lands on the landlord side only.
+    const collectedByContract = new Map<number, number>(); // rent + fees, net of refunds
+    const convertedDepositByContract = new Map<number, number>(); // deposits taken as landlord revenue
     const convertedDepositVoucherIds = new Set<number>();
     for (const col of collections) {
       const pay = paymentById.get(col.paymentId);
@@ -84,11 +87,11 @@ class ReportsController {
         continue;
       }
       // Payment-less collection linked to a deposit voucher = a deposit taken as
-      // revenue on termination → count it as collected income for its contract.
+      // revenue on termination → it moves to the landlord (not the tenant).
       const inv = col.invoiceId != null ? invoiceById.get(col.invoiceId) : null;
       if (inv && inv.kind === "deposit" && inv.contractId != null) {
         convertedDepositVoucherIds.add(inv.id);
-        collectedByContract.set(inv.contractId, round2((collectedByContract.get(inv.contractId) ?? 0) + Number(col.amount)));
+        convertedDepositByContract.set(inv.contractId, round2((convertedDepositByContract.get(inv.contractId) ?? 0) + Number(col.amount)));
       }
     }
     // Only APPROVED (confirmed) commission invoices count — drafts never enter
@@ -125,7 +128,8 @@ class ReportsController {
     for (const c of contracts) {
       const { key, name, ownerId } = landlordOf(c);
       const r = ensureL(key, name, ownerId);
-      r.rentCollected = round2(r.rentCollected + (collectedByContract.get(c.id) ?? 0));
+      // Rent/fees + any deposit taken as revenue for this contract.
+      r.rentCollected = round2(r.rentCollected + (collectedByContract.get(c.id) ?? 0) + (convertedDepositByContract.get(c.id) ?? 0));
       r.commission = round2(r.commission + (commissionByContract.get(c.id) ?? 0));
       r.maintenance = round2(r.maintenance + (maintByContract.get(c.id) ?? 0));
     }
