@@ -57,6 +57,15 @@ class ReportsController {
     // ── lookup maps ──
     const propById = new Map(properties.map((p) => [p.id, p]));
     const ownerById = new Map(owners.map((o) => [o.id, o]));
+    // Owner lookup by national-id / name — used to resolve a contract's landlord
+    // to a real owner record even when its property has no owner link, so the
+    // landlord statement doesn't split the same person into two rows.
+    const ownerByIdNum = new Map<string, any>();
+    const ownerByName = new Map<string, any>();
+    for (const o of owners) {
+      if (o.idNumber) ownerByIdNum.set(String(o.idNumber).trim(), o);
+      if (o.name) ownerByName.set(String(o.name).trim().toLowerCase(), o);
+    }
     const unitProp = new Map(units.map((u) => [u.id, u.propertyId]));
     // contract → propertyId (first unit's property)
     const contractProp = new Map<number, number>();
@@ -111,8 +120,16 @@ class ReportsController {
     const landlordOf = (c: any): { key: string; name: string; ownerId: number | null } => {
       const pid = contractProp.get(c.id);
       const prop = pid != null ? propById.get(pid) : null;
-      const ownerId = prop?.ownerId ?? null;
-      const owner = ownerId != null ? ownerById.get(ownerId) : null;
+      let owner = prop?.ownerId != null ? ownerById.get(prop.ownerId) : null;
+      // No owner via the property → match the contract's landlord snapshot
+      // (id number, then name) to an owner record, so this contract groups under
+      // the same owner key as that owner's expenses (no duplicate landlord row).
+      if (!owner) {
+        owner = (c.landlordIdNumber && ownerByIdNum.get(String(c.landlordIdNumber).trim()))
+          || (c.landlordName && ownerByName.get(String(c.landlordName).trim().toLowerCase()))
+          || null;
+      }
+      const ownerId = owner?.id ?? null;
       const name = owner?.name || c.landlordName || "—";
       return { key: ownerId != null ? `o:${ownerId}` : `n:${name}`, name, ownerId };
     };
