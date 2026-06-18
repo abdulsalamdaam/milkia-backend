@@ -142,10 +142,6 @@ function appendFees(
   start: Date, end: Date, additionalFees?: FeeEntry[] | null,
 ) {
   if (!additionalFees || additionalFees.length === 0) return;
-  const totalMonths = Math.max(1,
-    (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth())
-  );
-  const contractYears = Math.max(1, Math.ceil(totalMonths / 12));
 
   for (const fee of additionalFees) {
     // 15% VAT added on top of the fee when opted in.
@@ -169,30 +165,33 @@ function appendFees(
       continue;
     }
 
-    const feeAmt = (parseFloat(fee.amount) || 0) * feeVat;
-    if (feeAmt <= 0) continue;
+    const feeAnnual = parseFloat(fee.amount) || 0;
+    if (feeAnnual <= 0) continue;
 
-    const dates: Date[] = [];
-
+    // A one-time fee is charged once in full.
     if (fee.recurrence === "one_time" || fee.recurrence === "once") {
-      dates.push(fee.dueDate ? new Date(fee.dueDate) : new Date(start));
-    } else if (fee.recurrence === "annual") {
-      for (let y = 0; y < contractYears; y++) {
-        const d = addMonthsUTC(start, y * 12);
-        if (d <= end) dates.push(d);
-      }
-    } else if (fee.recurrence === "semi_annual") {
-      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i * 6)) dates.push(d);
-    } else if (fee.recurrence === "quarterly") {
-      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i * 3)) dates.push(d);
-    } else {
-      for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i)) dates.push(d);
-    }
-
-    for (const d of dates) {
+      const d = fee.dueDate ? new Date(fee.dueDate) : new Date(start);
       rows.push({
         contractId, userId,
-        amount: round2(feeAmt).toFixed(2),
+        amount: round2(feeAnnual * feeVat).toFixed(2),
+        dueDate: d.toISOString().split("T")[0]!,
+        status: "pending",
+        description: fee.name || "رسوم",
+        vatEnabled: !!fee.vat,
+        isDemo: false,
+      });
+      continue;
+    }
+
+    // Recurring fees behave like rent: the entered amount is the ANNUAL fee,
+    // split across the cycle. step/12 is the per-occurrence fraction —
+    // e.g. 1000 quarterly → 250 each (×4 = 1000/yr); 1000 monthly → 83.33 each.
+    const step = fee.recurrence === "annual" ? 12 : fee.recurrence === "semi_annual" ? 6 : fee.recurrence === "quarterly" ? 3 : 1;
+    const perPeriod = feeAnnual * (step / 12) * feeVat;
+    for (let i = 0, d = addMonthsUTC(start, 0); d <= end; i++, d = addMonthsUTC(start, i * step)) {
+      rows.push({
+        contractId, userId,
+        amount: round2(perPeriod).toFixed(2),
         dueDate: d.toISOString().split("T")[0]!,
         status: "pending",
         description: fee.name || "رسوم",
