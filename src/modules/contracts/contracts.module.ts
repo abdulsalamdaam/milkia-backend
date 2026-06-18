@@ -810,6 +810,29 @@ class ContractsController {
     if (body?.deposit === "forfeit" && buckets.deposit.total > 0.01) {
       await this.db.update(contractsTable).set({ depositStatus: "forfeited" } as any).where(eq(contractsTable.id, id));
     }
+    // Take the deposit as a collection (revenue) for the landlord: record a real
+    // collection against each deposit voucher so the held amount now appears in
+    // Collections as collected money. The deposit is flagged forfeited (kept).
+    if (body?.deposit === "revenue" && buckets.depositVoucherIds.length > 0) {
+      const vouchers = await this.db.select({
+        id: simpleInvoicesTable.id, total: simpleInvoicesTable.total,
+        receiptNumber: simpleInvoicesTable.receiptNumber, method: simpleInvoicesTable.paymentMethod,
+      }).from(simpleInvoicesTable).where(inArray(simpleInvoicesTable.id, buckets.depositVoucherIds));
+      for (const v of vouchers) {
+        const amt = round2(Number(v.total));
+        if (amt <= 0.01) continue;
+        // Idempotent — skip if this voucher was already converted.
+        const [existing] = await this.db.select({ id: paymentCollectionsTable.id })
+          .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, v.id));
+        if (existing) continue;
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: null, userId: ownerId, amount: amt.toFixed(2), collectedDate: today,
+          method: v.method || "bank_transfer", receiptNumber: v.receiptNumber, invoiceId: v.id,
+          notes: "تأمين محوّل إلى إيراد عند إنهاء العقد",
+        } as any);
+      }
+      await this.db.update(contractsTable).set({ depositStatus: "forfeited" } as any).where(eq(contractsTable.id, id));
+    }
 
     // Recompute the status of every installment a refund touched.
     for (const pid of affected) {
