@@ -87,6 +87,8 @@ export const contractsTable = pgTable("contracts", {
   status: contractStatusEnum("status").notNull().default("active"),
   isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
+  // Optional supporting document (signed contract / offer) — MinIO object key.
+  attachmentKey: text("attachment_key"),
   notes: text("notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

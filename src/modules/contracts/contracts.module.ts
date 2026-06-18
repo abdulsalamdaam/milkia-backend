@@ -36,7 +36,7 @@ const CONTRACT_FIELDS = [
   "agencyFee", "firstPaymentAmount", "additionalFees", "customSchedule",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
-  "status", "notes", "isDraft",
+  "status", "notes", "isDraft", "attachmentKey",
 ] as const;
 
 @ApiTags("contracts")
@@ -325,6 +325,7 @@ class ContractsController {
       landlordAdditionalNumber: body.landlordAdditionalNumber ?? null,
       landlordBuildingNumber: body.landlordBuildingNumber ?? null,
       status: body.isDraft ? "pending" : "active",
+      attachmentKey: body.attachmentKey ?? null,
       notes: body.notes ?? null,
       isDraft: Boolean(body.isDraft ?? false),
       isDemo: false,
