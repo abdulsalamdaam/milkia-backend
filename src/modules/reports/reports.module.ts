@@ -142,12 +142,12 @@ class ReportsController {
     const contractTenant = new Map<number, { id: number | null; name: string }>();
     for (const c of contracts) contractTenant.set(c.id, { id: c.tenantId ?? null, name: c.tenantName || (c.tenantId != null ? tenantById.get(c.tenantId)?.name : null) || "—" });
 
-    type TStat = { key: string; tenantId: number | null; tenant: string; invoiced: number; collected: number; balance: number };
+    type TStat = { key: string; tenantId: number | null; tenant: string; invoiced: number; collected: number; deposit: number; balance: number };
     const tmap = new Map<string, TStat>();
     const ensureT = (id: number | null, name: string) => {
       const key = id != null ? `t:${id}` : `n:${name}`;
       let r = tmap.get(key);
-      if (!r) { r = { key, tenantId: id, tenant: name, invoiced: 0, collected: 0, balance: 0 }; tmap.set(key, r); }
+      if (!r) { r = { key, tenantId: id, tenant: name, invoiced: 0, collected: 0, deposit: 0, balance: 0 }; tmap.set(key, r); }
       return r;
     };
     // Invoiced = APPROVED tenant rent invoices only. Drafts never enter the
@@ -165,6 +165,15 @@ class ReportsController {
       const t = contractTenant.get(c.id)!;
       const r = ensureT(t.id, t.name);
       r.collected = round2(r.collected + (collectedByContract.get(c.id) ?? 0));
+    }
+    // Security deposit the tenant has paid (held trust money) — surfaced as a
+    // separate figure so it reflects in the statement without distorting the
+    // rent invoiced/collected/balance accounting.
+    for (const inv of invoices) {
+      if (inv.kind !== "deposit" || inv.status !== "confirmed") continue;
+      const name = inv.tenantName || (inv.tenantId != null ? tenantById.get(inv.tenantId)?.name : null) || "—";
+      const r = ensureT(inv.tenantId ?? null, name);
+      r.deposit = round2(r.deposit + Number(inv.total));
     }
     for (const r of tmap.values()) r.balance = round2(r.invoiced - r.collected);
     const tenantStatement = [...tmap.values()].sort((a, b) => b.balance - a.balance);
