@@ -66,14 +66,30 @@ class ReportsController {
       if (pid != null) contractProp.set(cu.contractId, pid);
     }
     const paymentById = new Map(payments.map((p) => [p.id, p]));
+    const invoiceById = new Map(invoices.map((i) => [i.id, i]));
 
     // Per-contract aggregates.
-    const collectedByContract = new Map<number, number>(); // rent + fees, excl deposit, net of refunds
+    // Deposit vouchers normally hold trust money (no collection). When a deposit
+    // is "taken as a collection for the landlord" on termination, a real
+    // collection is recorded against the deposit voucher — those (and only
+    // those) count as collected income for the contract, and the deposit is
+    // then NOT shown as a held balance (see the tenant deposit loop below).
+    const collectedByContract = new Map<number, number>(); // rent + fees + converted deposits, net of refunds
+    const convertedDepositVoucherIds = new Set<number>();
     for (const col of collections) {
       const pay = paymentById.get(col.paymentId);
-      if (!pay) continue;
-      if (pay.description === DEPOSIT_DESC) continue; // deposit is a held balance, not income
-      collectedByContract.set(pay.contractId, round2((collectedByContract.get(pay.contractId) ?? 0) + Number(col.amount)));
+      if (pay) {
+        if (pay.description === DEPOSIT_DESC) continue; // held deposit, not income
+        collectedByContract.set(pay.contractId, round2((collectedByContract.get(pay.contractId) ?? 0) + Number(col.amount)));
+        continue;
+      }
+      // Payment-less collection linked to a deposit voucher = a deposit taken as
+      // revenue on termination → count it as collected income for its contract.
+      const inv = col.invoiceId != null ? invoiceById.get(col.invoiceId) : null;
+      if (inv && inv.kind === "deposit" && inv.contractId != null) {
+        convertedDepositVoucherIds.add(inv.id);
+        collectedByContract.set(inv.contractId, round2((collectedByContract.get(inv.contractId) ?? 0) + Number(col.amount)));
+      }
     }
     // Only APPROVED (confirmed) commission invoices count — drafts never enter
     // the books.
@@ -171,6 +187,9 @@ class ReportsController {
     // rent invoiced/collected/balance accounting.
     for (const inv of invoices) {
       if (inv.kind !== "deposit" || inv.status !== "confirmed") continue;
+      // A deposit converted to revenue on termination is now counted in
+      // `collected` — don't also show it as a held deposit.
+      if (convertedDepositVoucherIds.has(inv.id)) continue;
       const name = inv.tenantName || (inv.tenantId != null ? tenantById.get(inv.tenantId)?.name : null) || "—";
       const r = ensureT(inv.tenantId ?? null, name);
       r.deposit = round2(r.deposit + Number(inv.total));
