@@ -99,7 +99,8 @@ export class ZatcaOnboardingService {
     for (const c of creds) if (c.ownerId != null) byOwner.set(c.ownerId, c);
     return owners.map((o: any) => {
       const c = byOwner.get(o.id);
-      const addressReady = !!(o.nationalAddressCity && o.nationalAddressDistrict && o.nationalAddressStreet && o.postalCode && o.buildingNumber);
+      // National (short) address: the code saved on the seller profile during onboarding.
+      const nationalAddress = c?.locationAddress || null;
       const vatNumber = o.taxNumber || null;
       return {
         ownerId: o.id,
@@ -107,7 +108,8 @@ export class ZatcaOnboardingService {
         type: o.type,
         vatNumber,
         vatReady: !!vatNumber,
-        addressReady,
+        nationalAddress,
+        addressReady: !!nationalAddress,
         configured: !!c,
         activeEnvironment: c?.activeEnvironment ?? null,
         sandboxOnboarded: !!c?.sandboxCertPem,
