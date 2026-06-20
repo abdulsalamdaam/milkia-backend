@@ -8,13 +8,18 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
+import { EmailModule } from "../email/email.module";
+import { EmailService } from "../email/email.service";
 
 @ApiTags("support")
 @ApiBearerAuth("user-jwt")
 @Controller("support/tickets")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class SupportController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   private isAdmin(user: AuthUser) {
     return user.role === "super_admin" || user.role === "admin";
@@ -100,6 +105,16 @@ class SupportController {
       message: body.message.trim(),
     }).returning();
     await this.db.update(supportTicketsTable).set({ updatedAt: new Date() }).where(eq(supportTicketsTable.id, tid));
+
+    // When the team (admin) replies, email the ticket owner so they don't have
+    // to keep the portal open. Best-effort — never blocks the reply.
+    if (senderRole === "admin") {
+      try {
+        const [owner] = await this.db.select({ email: usersTable.email, name: usersTable.name })
+          .from(usersTable).where(eq(usersTable.id, ticket.userId));
+        if (owner?.email) void this.email.sendSupportReply(owner.email, owner.name || "", tid, body.message.trim());
+      } catch { /* email is best-effort */ }
+    }
     return msg;
   }
 
@@ -115,5 +130,5 @@ class SupportController {
   }
 }
 
-@Module({ controllers: [SupportController] })
+@Module({ imports: [EmailModule], controllers: [SupportController] })
 export class SupportModule {}

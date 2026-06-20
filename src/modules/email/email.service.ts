@@ -515,6 +515,31 @@ export class EmailService {
       replyTo: payload.email || undefined,
     });
   }
+
+  /** Notify a customer that the support team replied to their ticket. */
+  async sendSupportReply(to: string, name: string, ticketId: number, message: string): Promise<boolean> {
+    if (!to) return false;
+    const safeName = escapeHtml(name || "");
+    const link = `${APP_PUBLIC_URL.replace(/\/$/, "")}/dashboard/settings?section=support`;
+    const html = layout(`
+      <h1 style="color:#0f172a;margin:0 0 16px;font-size:20px;">رد جديد على تذكرة الدعم #${ticketId}</h1>
+      <p style="margin:0 0 12px;color:#334155;line-height:1.7;">
+        ${safeName ? `${safeName}، ` : ""}وصلك رد من فريق الدعم على تذكرتك رقم <strong>#${ticketId}</strong>:
+      </p>
+      <div style="margin-top:8px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">
+        <div style="color:#0f172a;line-height:1.7;white-space:pre-wrap;">${escapeHtml(message)}</div>
+      </div>
+      <div style="margin-top:20px;text-align:center;">
+        <a href="${link}" style="display:inline-block;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#ffffff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:10px;font-size:14px;">عرض المحادثة والرد</a>
+      </div>
+    `);
+    return this.send({
+      to,
+      subject: `رد على تذكرة الدعم #${ticketId} — عقودك`,
+      html,
+      text: `وصلك رد على تذكرة الدعم #${ticketId}:\n\n${message}`,
+    });
+  }
 }
 
 function escapeHtml(value: string): string {
