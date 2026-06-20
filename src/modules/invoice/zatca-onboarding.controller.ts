@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Get, Post, UseGuards, BadRequestException,
+  Body, Controller, Get, Post, Query, UseGuards, BadRequestException,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
@@ -18,15 +18,33 @@ import type { ZatcaEnv } from "./services/zatca-api.service";
 export class ZatcaOnboardingController {
   constructor(private readonly onboarding: ZatcaOnboardingService) {}
 
+  /** Parse an optional landlord id (the per-landlord seller). */
+  private oid(v: unknown): number | null {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+
   /**
-   * GET /zatca/credentials
-   * Read seller profile + onboarding state. Secrets are NOT returned — only
-   * presence flags so the dashboard can show a checklist.
+   * GET /zatca/landlords
+   * Every landlord with their ZATCA integration status — drives the settings
+   * tab listing all landlords and whether each is integrated.
+   */
+  @Get("landlords")
+  @RequirePermissions(PERMISSIONS.INVOICES_VIEW)
+  async listLandlords(@CurrentUser() user: AuthUser) {
+    return this.onboarding.listLandlordStatus(scopeId(user));
+  }
+
+  /**
+   * GET /zatca/credentials?ownerId=
+   * Read seller profile + onboarding state for a landlord (or the account-level
+   * seller when ownerId is omitted). Secrets are NOT returned — only presence
+   * flags so the dashboard can show a checklist.
    */
   @Get("credentials")
   @RequirePermissions(PERMISSIONS.INVOICES_VIEW)
-  async getCreds(@CurrentUser() user: AuthUser) {
-    const c = await this.onboarding.getCredentials(scopeId(user));
+  async getCreds(@CurrentUser() user: AuthUser, @Query("ownerId") ownerId?: string) {
+    const c = await this.onboarding.getCredentials(scopeId(user), this.oid(ownerId));
     if (!c) return { configured: false };
     return {
       configured: true,
@@ -74,11 +92,11 @@ export class ZatcaOnboardingController {
    */
   @Post("profile")
   @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
-  async upsertProfile(@CurrentUser() user: AuthUser, @Body() body: SellerProfileInput) {
+  async upsertProfile(@CurrentUser() user: AuthUser, @Body() body: SellerProfileInput & { ownerId?: number }) {
     if (!body?.sellerName || !body.sellerVatNumber || !body.sellerStreet) {
       throw new BadRequestException("sellerName, sellerVatNumber, sellerStreet are required");
     }
-    return this.onboarding.upsertProfile(scopeId(user), body);
+    return this.onboarding.upsertProfile(scopeId(user), body, this.oid(body.ownerId));
   }
 
   /**
@@ -90,11 +108,11 @@ export class ZatcaOnboardingController {
   @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
   async issueComplianceCsid(
     @CurrentUser() user: AuthUser,
-    @Body() body: { otp?: string; env?: ZatcaEnv },
+    @Body() body: { otp?: string; env?: ZatcaEnv; ownerId?: number },
     // env can also come from the path
   ) {
     const env: ZatcaEnv = (body.env ?? "sandbox") as ZatcaEnv;
-    return this.onboarding.issueComplianceCsid(scopeId(user), env, body.otp);
+    return this.onboarding.issueComplianceCsid(scopeId(user), env, body.otp, this.oid(body.ownerId));
   }
 
   /**
@@ -105,8 +123,8 @@ export class ZatcaOnboardingController {
    */
   @Post("onboarding/production")
   @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
-  async issueProductionCsid(@CurrentUser() user: AuthUser, @Body() body: { source?: "sandbox" | "production" }) {
-    return this.onboarding.issueProductionCsid(scopeId(user), body.source ?? "production");
+  async issueProductionCsid(@CurrentUser() user: AuthUser, @Body() body: { source?: "sandbox" | "production"; ownerId?: number }) {
+    return this.onboarding.issueProductionCsid(scopeId(user), body.source ?? "production", this.oid(body.ownerId));
   }
 
   /**
@@ -116,9 +134,9 @@ export class ZatcaOnboardingController {
    */
   @Post("switch")
   @RequirePermissions(PERMISSIONS.ZATCA_PROMOTE_PRODUCTION)
-  async switchEnv(@CurrentUser() user: AuthUser, @Body() body: { env: ZatcaEnv }) {
+  async switchEnv(@CurrentUser() user: AuthUser, @Body() body: { env: ZatcaEnv; ownerId?: number }) {
     if (!body?.env) throw new BadRequestException("env is required");
-    return this.onboarding.switchEnvironment(scopeId(user), body.env);
+    return this.onboarding.switchEnvironment(scopeId(user), body.env, this.oid(body.ownerId));
   }
 
   /**
@@ -129,9 +147,9 @@ export class ZatcaOnboardingController {
    */
   @Post("reset-chain")
   @RequirePermissions(PERMISSIONS.ZATCA_PROMOTE_PRODUCTION)
-  async resetChain(@CurrentUser() user: AuthUser, @Body() body: { env: ZatcaEnv }) {
+  async resetChain(@CurrentUser() user: AuthUser, @Body() body: { env: ZatcaEnv; ownerId?: number }) {
     if (!body?.env) throw new BadRequestException("env is required");
-    await this.onboarding.resetChain(scopeId(user), body.env);
+    await this.onboarding.resetChain(scopeId(user), body.env, this.oid(body.ownerId));
     return { ok: true };
   }
 }

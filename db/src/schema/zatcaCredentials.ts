@@ -2,6 +2,7 @@ import { pgTable, text, serial, timestamp, integer, pgEnum, uniqueIndex } from "
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
+import { ownersTable } from "./owners";
 
 /**
  * Which ZATCA environment a seller is currently operating in.
@@ -33,6 +34,13 @@ export const zatcaCredentialsTable = pgTable("zatca_credentials", {
   userId: integer("user_id")
     .notNull()
     .references(() => usersTable.id, { onDelete: "cascade" }),
+
+  /**
+   * The landlord (owner) this ZATCA seller belongs to. Each landlord onboards
+   * separately with their own VAT registration + CSID; null = legacy
+   * account-level seller (the management company).
+   */
+  ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "cascade" }),
 
   /** Currently selected environment — controls which credentials and counter are used. */
   activeEnvironment: zatcaEnvEnum("active_environment").notNull().default("sandbox"),
@@ -87,7 +95,9 @@ export const zatcaCredentialsTable = pgTable("zatca_credentials", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
 }, (t) => ({
-  userIdUniq: uniqueIndex("zatca_credentials_user_id_uniq").on(t.userId),
+  // One credential row per (account, landlord). Two partial unique indexes so a
+  // null ownerId (the legacy account-level seller) is also unique per account.
+  userOwnerUniq: uniqueIndex("zatca_credentials_user_owner_uniq").on(t.userId, t.ownerId),
 }));
 
 export const insertZatcaCredentialsSchema = createInsertSchema(zatcaCredentialsTable).omit({

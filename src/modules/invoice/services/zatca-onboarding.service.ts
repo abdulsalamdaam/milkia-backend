@@ -6,6 +6,7 @@ import {
   type ZatcaCredentials,
   invoicesTable,
   invoiceLinesTable,
+  ownersTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../../database/database.module";
 import { CsrService } from "./csr.service";
@@ -63,16 +64,61 @@ export class ZatcaOnboardingService {
 
   /* ─── Profile helpers ───────────────────────────────────────────────── */
 
-  async getCredentials(userId: number): Promise<ZatcaCredentials | null> {
-    const [row] = await this.db
-      .select()
-      .from(zatcaCredentialsTable)
-      .where(and(eq(zatcaCredentialsTable.userId, userId), isNull(zatcaCredentialsTable.deletedAt)));
+  /** Scope to one account + landlord (ownerId null = legacy account-level seller). */
+  private credsWhere(userId: number, ownerId: number | null) {
+    return and(
+      eq(zatcaCredentialsTable.userId, userId),
+      ownerId == null ? isNull(zatcaCredentialsTable.ownerId) : eq(zatcaCredentialsTable.ownerId, ownerId),
+      isNull(zatcaCredentialsTable.deletedAt),
+    );
+  }
+
+  async getCredentials(userId: number, ownerId: number | null = null): Promise<ZatcaCredentials | null> {
+    const [row] = await this.db.select().from(zatcaCredentialsTable).where(this.credsWhere(userId, ownerId));
     return row ?? null;
   }
 
-  async upsertProfile(userId: number, profile: SellerProfileInput): Promise<ZatcaCredentials> {
-    const existing = await this.getCredentials(userId);
+  /** Every landlord's onboarding state for the account (for the integration tab). */
+  async listByAccount(userId: number): Promise<ZatcaCredentials[]> {
+    return this.db.select().from(zatcaCredentialsTable)
+      .where(and(eq(zatcaCredentialsTable.userId, userId), isNull(zatcaCredentialsTable.deletedAt)));
+  }
+
+  /**
+   * Every landlord with their ZATCA integration status — drives the settings
+   * tab ("show all landlords and which one is integrated"). Reports whether the
+   * landlord's VAT number + national address are ready to onboard, and the
+   * onboarding state per environment.
+   */
+  async listLandlordStatus(userId: number) {
+    const [owners, creds] = await Promise.all([
+      this.db.select().from(ownersTable).where(and(eq(ownersTable.userId, userId), isNull(ownersTable.deletedAt))),
+      this.listByAccount(userId),
+    ]);
+    const byOwner = new Map<number, ZatcaCredentials>();
+    for (const c of creds) if (c.ownerId != null) byOwner.set(c.ownerId, c);
+    return owners.map((o: any) => {
+      const c = byOwner.get(o.id);
+      const addressReady = !!(o.nationalAddressCity && o.nationalAddressDistrict && o.nationalAddressStreet && o.postalCode && o.buildingNumber);
+      const vatNumber = o.taxNumber || null;
+      return {
+        ownerId: o.id,
+        name: o.name,
+        type: o.type,
+        vatNumber,
+        vatReady: !!vatNumber,
+        addressReady,
+        configured: !!c,
+        activeEnvironment: c?.activeEnvironment ?? null,
+        sandboxOnboarded: !!c?.sandboxCertPem,
+        productionOnboarded: !!c?.prodCertPem,
+        onboardedAt: c?.sandboxOnboardedAt ?? c?.prodOnboardedAt ?? null,
+      };
+    });
+  }
+
+  async upsertProfile(userId: number, profile: SellerProfileInput, ownerId: number | null = null): Promise<ZatcaCredentials> {
+    const existing = await this.getCredentials(userId, ownerId);
     if (existing) {
       const [row] = await this.db
         .update(zatcaCredentialsTable)
@@ -104,6 +150,7 @@ export class ZatcaOnboardingService {
       .insert(zatcaCredentialsTable)
       .values({
         userId,
+        ownerId: ownerId ?? null,
         activeEnvironment: "sandbox",
         sellerName: profile.sellerName,
         sellerNameAr: profile.sellerNameAr ?? null,
@@ -140,8 +187,9 @@ export class ZatcaOnboardingService {
     userId: number,
     environment: ZatcaEnv,
     otp: string = SANDBOX_OTP,
+    ownerId: number | null = null,
   ): Promise<{ binarySecurityToken: string; complianceRequestId: string; certPem: string; httpStatus: number }> {
-    const creds = await this.getCredentials(userId);
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) throw new NotFoundException("Seller profile not configured");
 
     const csr = await this.csr.generateCsr({
@@ -218,8 +266,9 @@ export class ZatcaOnboardingService {
   async issueProductionCsid(
     userId: number,
     environment: "sandbox" | "production" = "production",
+    ownerId: number | null = null,
   ): Promise<{ binarySecurityToken: string; httpStatus: number }> {
-    const creds = await this.getCredentials(userId);
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) throw new NotFoundException("Seller profile not configured");
     const targetCols = environment === "sandbox" ? "sandbox" : "prod";
 
@@ -268,8 +317,8 @@ export class ZatcaOnboardingService {
    * cycle (≥ 1 standard + 1 simplified + 1 credit + 1 debit invoice all
    * cleared/reported) have been completed against the prod CSID.
    */
-  async switchEnvironment(userId: number, env: ZatcaEnv): Promise<ZatcaCredentials> {
-    const creds = await this.getCredentials(userId);
+  async switchEnvironment(userId: number, env: ZatcaEnv, ownerId: number | null = null): Promise<ZatcaCredentials> {
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) throw new NotFoundException("Seller profile not configured");
 
     if (env === "production") {
@@ -316,8 +365,8 @@ export class ZatcaOnboardingService {
    * (icv, pih) pair. Caller is responsible for incrementing & writing back
    * the new PIH after a successful submission via `commitInvoiceState`.
    */
-  async getActiveCredentials(userId: number): Promise<{ creds: ZatcaCredentials; decrypted: DecryptedCreds }> {
-    const creds = await this.getCredentials(userId);
+  async getActiveCredentials(userId: number, ownerId: number | null = null): Promise<{ creds: ZatcaCredentials; decrypted: DecryptedCreds }> {
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) throw new NotFoundException("Seller profile not configured");
     const env = creds.activeEnvironment;
     const isSandbox = env === "sandbox";
@@ -348,8 +397,8 @@ export class ZatcaOnboardingService {
   }
 
   /** Persist the new ICV + PIH after a successful (or failed) submission. */
-  async commitInvoiceState(userId: number, env: ZatcaEnv, icv: number, newPih: string) {
-    const creds = await this.getCredentials(userId);
+  async commitInvoiceState(userId: number, env: ZatcaEnv, icv: number, newPih: string, ownerId: number | null = null) {
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) return;
     const updates: Partial<ZatcaCredentials> =
       env === "sandbox"
@@ -359,8 +408,8 @@ export class ZatcaOnboardingService {
   }
 
   /** Reset PIH chain back to the initial seed. Use only when starting fresh. */
-  async resetChain(userId: number, env: ZatcaEnv) {
-    const creds = await this.getCredentials(userId);
+  async resetChain(userId: number, env: ZatcaEnv, ownerId: number | null = null) {
+    const creds = await this.getCredentials(userId, ownerId);
     if (!creds) return;
     const updates: Partial<ZatcaCredentials> =
       env === "sandbox"
