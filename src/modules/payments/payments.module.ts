@@ -231,7 +231,10 @@ class PaymentsController {
     //    covers invoices that were linked to an installment).
     const collConds: any[] = [eq(paymentCollectionsTable.userId, uid)];
     if (s) collConds.push(or(ilike(paymentCollectionsTable.receiptNumber, s), ilike(contractsTable.tenantName, s), ilike(contractsTable.contractNumber, s), ilike(simpleInvoicesTable.number, s)));
-    if (contractIds && contractIds.length > 0) collConds.push(inArray(paymentsTable.contractId, contractIds));
+    // Match the payment's contract OR the invoice's contract, so invoice-only
+    // collections (e.g. a collected commission invoice, paymentId = null) aren't
+    // dropped when filtering Collections by landlord/property/unit.
+    if (contractIds && contractIds.length > 0) collConds.push(or(inArray(paymentsTable.contractId, contractIds), inArray(simpleInvoicesTable.contractId, contractIds)));
     // Legacy deposit collections (on a deposit payment row) are not revenue —
     // exclude them; the deposit shows once, as its receipt voucher (section 2).
     collConds.push(or(isNull(paymentsTable.description), ne(paymentsTable.description, DEPOSIT_DESC)));
