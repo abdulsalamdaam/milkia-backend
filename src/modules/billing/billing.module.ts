@@ -33,6 +33,11 @@ const today = () => new Date().toISOString().slice(0, 10);
 
 type LineItem = { description: string; quantity: number; unitPrice: number; amount: number; vat?: boolean };
 
+/** Result of the best-effort ZATCA mirror on approval — surfaced to the UI. */
+type ZatcaSubmitOutcome =
+  | { submitted: true; status: string; profile: string; environment: string; httpStatus: number; invoiceId: number; warnings: number }
+  | { submitted: false; code: "not_linked" | "not_onboarded" | "no_items" | "error"; reason: string };
+
 function normalizeItems(raw: any): LineItem[] {
   if (!Array.isArray(raw)) return [];
   return raw
@@ -589,8 +594,8 @@ class SimpleInvoicesController {
         status: "confirmed", confirmedAt: new Date(),
       }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
       // Mirror the note to ZATCA under the landlord's seller (best-effort).
-      await this.submitApprovedDocToZatca(uid, updated);
-      return updated;
+      const zatcaNote = await this.submitApprovedDocToZatca(uid, updated);
+      return { ...updated, zatca: zatcaNote };
     }
 
     // Invoice — just approve; collection happens later on the Collections page.
@@ -601,7 +606,7 @@ class SimpleInvoicesController {
     // When the landlord (the seller) is linked to ZATCA, mirror this invoice to
     // ZATCA on approval — clearance for B2B, reporting for B2C. Best-effort:
     // never blocks the approval (see submitApprovedDocToZatca).
-    await this.submitApprovedDocToZatca(uid, updated);
+    const zatca = await this.submitApprovedDocToZatca(uid, updated);
 
     // A rent invoice spawns its paired commission invoice (فاتورة عمولة) only
     // once APPROVED — not at draft — so the commission surfaces alongside an
@@ -612,7 +617,7 @@ class SimpleInvoicesController {
       try { commission = await this.maybeCreateCommissionInvoice(uid, doc, Number(doc.contractId)); }
       catch { /* ignore — rent invoice already approved */ }
     }
-    return { ...updated, commission };
+    return { ...updated, commission, zatca };
   }
 
   /**
@@ -622,7 +627,7 @@ class SimpleInvoicesController {
    * duplicate number, validation, outage) must not block the approval. The
    * landlord's seller gets a real signed, submitted invoice on their side.
    */
-  private async submitApprovedDocToZatca(uid: number, doc: any): Promise<void> {
+  private async submitApprovedDocToZatca(uid: number, doc: any): Promise<ZatcaSubmitOutcome> {
     try {
       // Resolve the landlord (owner) that is the ZATCA seller. A commission
       // invoice is issued BY the managing account (seller = account-level).
@@ -630,10 +635,10 @@ class SimpleInvoicesController {
 
       // Only proceed if that seller is configured AND onboarded for its active env.
       const creds = await this.zatcaOnboarding.getCredentials(uid, ownerId);
-      if (!creds) { this.logger.debug(`ZATCA: ${doc.number} skipped — seller not configured (ownerId=${ownerId})`); return; }
+      if (!creds) { this.logger.debug(`ZATCA: ${doc.number} skipped — seller not configured (ownerId=${ownerId})`); return { submitted: false, code: "not_linked", reason: "Landlord is not linked to ZATCA" }; }
       const env = creds.activeEnvironment;
       const onboarded = env === "sandbox" ? !!creds.sandboxCertPem : !!creds.prodCertPem;
-      if (!onboarded) { this.logger.debug(`ZATCA: ${doc.number} skipped — landlord not onboarded for ${env}`); return; }
+      if (!onboarded) { this.logger.debug(`ZATCA: ${doc.number} skipped — landlord not onboarded for ${env}`); return { submitted: false, code: "not_onboarded", reason: `Landlord not onboarded for ${env}` }; }
 
       const contract = doc.contractId
         ? (await this.db.select().from(contractsTable)
@@ -641,7 +646,7 @@ class SimpleInvoicesController {
         : null;
 
       const lines = this.zatcaLinesFromDoc(doc);
-      if (!lines.length) { this.logger.debug(`ZATCA: ${doc.number} skipped — no line items`); return; }
+      if (!lines.length) { this.logger.debug(`ZATCA: ${doc.number} skipped — no line items`); return { submitted: false, code: "no_items", reason: "No line items to invoice" }; }
 
       // Buyer's full structured address comes from the tenant record (rent) or
       // the landlord/owner record (commission) — both store a national address —
@@ -693,8 +698,11 @@ class SimpleInvoicesController {
       };
       const result = await this.invoices.issue(uid, dto);
       this.logger.log(`ZATCA: ${doc.number} → ${result.invoice.status} (${result.invoice.submittedTo}, ${profile}) ownerId=${ownerId}`);
+      const warnings = ((result.invoice.zatcaResponse as any)?.validationResults?.warningMessages ?? []).length;
+      return { submitted: true, status: result.invoice.status, profile, environment: env, httpStatus: result.invoice.httpStatus ?? 0, invoiceId: result.invoice.id, warnings };
     } catch (e: any) {
       this.logger.warn(`ZATCA submit failed for ${doc?.number}: ${e?.message ?? e}`);
+      return { submitted: false, code: "error", reason: e?.message ? String(e.message).slice(0, 300) : "ZATCA submission failed" };
     }
   }
 
