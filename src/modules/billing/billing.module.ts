@@ -148,7 +148,27 @@ class SimpleInvoicesController {
           .groupBy(paymentCollectionsTable.invoiceId)
       : [];
     const collMap = new Map((collAgg as Array<{ invoiceId: number | null; total: string | null }>).map((c) => [c.invoiceId, Number(c.total ?? 0)]));
-    const data = (rows as any[]).map((r) => ({ ...r, collectedAmount: round2(collMap.get(r.id) ?? 0) }));
+    // Amount collected under each invoice's OWN receipt-voucher number — used by
+    // the Receipt Vouchers page so a voucher reflects THAT collection (e.g. the
+    // remaining balance after an advance), not the full invoice total. A
+    // standalone voucher doc (kind receipt/deposit) IS its own amount (total).
+    const voucherAgg = ids.length
+      ? await this.db.select({ invoiceId: paymentCollectionsTable.invoiceId, receiptNumber: paymentCollectionsTable.receiptNumber, total: sum(paymentCollectionsTable.amount) })
+          .from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.invoiceId, ids))
+          .groupBy(paymentCollectionsTable.invoiceId, paymentCollectionsTable.receiptNumber)
+      : [];
+    const voucherMap = new Map<string, number>();
+    for (const v of voucherAgg as Array<{ invoiceId: number | null; receiptNumber: string | null; total: string | null }>) {
+      if (v.invoiceId != null && v.receiptNumber) voucherMap.set(`${v.invoiceId}|${v.receiptNumber}`, Number(v.total ?? 0));
+    }
+    const data = (rows as any[]).map((r) => {
+      const collected = round2(collMap.get(r.id) ?? 0);
+      const isVoucherDoc = r.kind === "receipt" || r.kind === "deposit";
+      const voucherAmount = isVoucherDoc
+        ? round2(Number(r.total))
+        : (r.receiptNumber ? round2(voucherMap.get(`${r.id}|${r.receiptNumber}`) ?? collected) : collected);
+      return { ...r, collectedAmount: collected, voucherAmount };
+    });
     return { data, page: q.page, pageSize: q.pageSize, total, stats };
   }
 
