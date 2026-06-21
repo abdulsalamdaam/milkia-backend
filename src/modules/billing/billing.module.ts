@@ -7,7 +7,7 @@ import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTabl
 import {
   simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
-  tenantsTable, ownersTable,
+  tenantsTable, ownersTable, invoicesTable,
   type BuyerSnapshot,
 } from "@oqudk/database";
 import type { InvoiceLineInput } from "../invoice/services/invoice-builder.service";
@@ -618,6 +618,31 @@ class SimpleInvoicesController {
       catch { /* ignore — rent invoice already approved */ }
     }
     return { ...updated, commission, zatca };
+  }
+
+  /**
+   * POST /simple-invoices/:id/submit-zatca
+   * Manually (re)submit an already-approved document to ZATCA. For invoices that
+   * were approved before the landlord was onboarded (or before auto-submit), or
+   * whose earlier attempt failed. Idempotent: if it's already in ZATCA, returns
+   * that instead of duplicating.
+   */
+  @Post(":id/submit-zatca")
+  @RequirePermissions(PERMISSIONS.INVOICES_WRITE)
+  async submitZatca(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const uid = scopeId(user);
+    const [doc] = await this.db.select().from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, uid), isNull(simpleInvoicesTable.deletedAt)));
+    if (!doc) throw new NotFoundException("Document not found");
+    if (doc.status !== "confirmed") throw new BadRequestException("اعتمد المستند قبل إرساله لهيئة الزكاة");
+    // Already mirrored? Don't duplicate — report its current ZATCA status.
+    const [existing] = await this.db.select({ status: invoicesTable.status, profile: invoicesTable.profile })
+      .from(invoicesTable).where(and(eq(invoicesTable.userId, uid), eq(invoicesTable.invoiceNumber, doc.number), isNull(invoicesTable.deletedAt)));
+    if (existing) {
+      return { zatca: { submitted: true, status: existing.status, profile: existing.profile, environment: "", httpStatus: 0, invoiceId: 0, warnings: 0, alreadyExists: true } };
+    }
+    const zatca = await this.submitApprovedDocToZatca(uid, doc);
+    return { zatca };
   }
 
   /**
