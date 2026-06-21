@@ -7,6 +7,7 @@ import {
   type InvoiceLine,
   type SellerSnapshot,
   type BuyerSnapshot,
+  type ZatcaCredentials,
   zatcaCredentialsTable,
   ZATCA_INITIAL_PIH,
 } from "@oqudk/database";
@@ -14,7 +15,7 @@ import { DRIZZLE, type Drizzle } from "../../../database/database.module";
 import { InvoiceBuilderService, type InvoiceLineInput, todayIsoDate, todayIsoTime } from "./invoice-builder.service";
 import { InvoiceSignerService } from "./invoice-signer.service";
 import { ZatcaApiService } from "./zatca-api.service";
-import { ZatcaOnboardingService } from "./zatca-onboarding.service";
+import { ZatcaOnboardingService, type DecryptedCreds } from "./zatca-onboarding.service";
 
 export interface CreateInvoiceDto {
   invoiceNumber: string;
@@ -250,66 +251,134 @@ export class InvoiceService {
     ok: boolean; httpStatus: number; status: string; warnings: string[]; errors: string[];
   }> {
     // getActiveCredentials throws clean HTTP errors (404/409) if not onboarded —
-    // let those bubble. Everything else (building, signing, submitting) is
-    // wrapped so a tooling/signing failure becomes a readable verdict, never a 500.
+    // let those bubble. Everything else is wrapped so a tooling/signing failure
+    // becomes a readable verdict, never a 500.
     const { creds, decrypted } = await this.onboarding.getActiveCredentials(userId, ownerId);
     try {
-      const issueDate = todayIsoDate();
-      const issueTime = todayIsoTime();
-      const sellerSnapshot: SellerSnapshot = {
-        name: creds.sellerName, nameAr: creds.sellerNameAr, vat: creds.sellerVatNumber, crn: creds.sellerCrn,
-        idScheme: creds.sellerIdScheme,
-        street: creds.sellerStreet, buildingNo: creds.sellerBuildingNo, district: creds.sellerDistrict,
-        city: creds.sellerCity, postalZone: creds.sellerPostalZone, additionalNo: creds.sellerAdditionalNo,
-      };
-      const built = this.builder.build({
-        profile: "standard",
-        docType: "invoice",
-        invoiceId: `CHK-${decrypted.icv + 1}`,
-        icv: decrypted.icv + 1,
-        pih: decrypted.pih,
-        issueDate, issueTime,
-        seller: sellerSnapshot,
-        buyer: { name: "Compliance Check", vat: "399999999900003", street: "Test St", buildingNo: "1234", district: "Test", city: "Riyadh", postalZone: "12345" },
-        lines: [{ id: "1", name: "فحص توافق ZATCA", quantity: 1, unitPrice: 1000, vatPercent: 15, vatCategory: "S" }],
-        currency: "SAR",
-      });
-      const signed = await this.signer.signInvoice({
-        invoiceXml: built.xml, privateKeyPem: decrypted.privateKeyPem, certPem: decrypted.certPem, profile: "standard",
-        qrFields: {
-          sellerName: sellerSnapshot.name, vatNumber: sellerSnapshot.vat,
-          timestamp: `${issueDate}T${issueTime}`,
-          totalWithVat: built.totals.taxInclusive.toFixed(2), vatTotal: built.totals.taxAmount.toFixed(2),
-        },
-      });
-      let resp;
-      try {
-        resp = await this.api.complianceInvoice({
-          binarySecurityToken: decrypted.binarySecurityToken, secret: decrypted.secret,
-          invoiceHash: signed.invoiceHashBase64, uuid: built.uuid, signedXml: signed.signedXml,
-          environment: decrypted.environment,
-        });
-      } catch (e) {
-        resp = { status: 0, raw: (e as Error).message, json: null, headers: {} } as any;
-      }
-      const j: any = resp.json ?? {};
-      const vr = j.validationResults ?? {};
-      const pick = (arr: any[]) => (Array.isArray(arr) ? arr.map((m) => m?.message || m?.code || String(m)) : []);
-      const errors = pick(vr.errorMessages);
-      const warnings = pick(vr.warningMessages);
-      // If ZATCA returned no structured error but a non-2xx, surface the raw body.
-      if (!errors.length && !(resp.status >= 200 && resp.status < 300)) {
-        const raw = (resp as any).raw || (j && Object.keys(j).length ? JSON.stringify(j) : "");
-        errors.push(raw ? `HTTP ${resp.status}: ${String(raw).slice(0, 500)}` : `HTTP ${resp.status}`);
-      }
-      const reportStatus = j.reportingStatus || j.clearanceStatus || vr.status || (resp.status >= 200 && resp.status < 300 ? "PASS" : `HTTP ${resp.status}`);
-      const ok = resp.status >= 200 && resp.status < 300 && errors.length === 0;
-      return { ok, httpStatus: resp.status, status: String(reportStatus), warnings, errors };
+      const r = await this.submitComplianceDoc(
+        decrypted, this.sellerSnapshotFrom(creds),
+        { profile: "standard", docType: "invoice" }, decrypted.icv + 1, decrypted.pih,
+      );
+      return { ok: r.ok, httpStatus: r.httpStatus, status: r.status, warnings: r.warnings, errors: r.errors };
     } catch (e) {
-      // Signing/canonicalization tooling failure, encryption mismatch, etc.
       const msg = (e as Error)?.message || String(e);
       return { ok: false, httpStatus: 0, status: "ERROR", warnings: [], errors: [msg.slice(0, 500)] };
     }
+  }
+
+  /**
+   * Run the FULL compliance test suite required before ZATCA will issue a
+   * production CSID: every document type declared in the CSR's invoiceType
+   * (e.g. "1100" → standard + simplified, each as invoice/credit/debit).
+   * Documents are PIH-chained in sequence. Nothing is persisted, so it is
+   * safely re-runnable. Returns a per-document verdict plus an overall pass.
+   */
+  async complianceSuite(userId: number, ownerId: number | null): Promise<{
+    ok: boolean; passed: number; total: number;
+    results: { doc: string; ok: boolean; status: string; warnings: string[]; errors: string[] }[];
+  }> {
+    const { creds, decrypted } = await this.onboarding.getActiveCredentials(userId, ownerId);
+    const seller = this.sellerSnapshotFrom(creds);
+    const it = creds.invoiceType || "1100";
+    const specs: { profile: "standard" | "simplified"; docType: "invoice" | "credit" | "debit"; doc: string }[] = [];
+    if (it[0] === "1") specs.push(
+      { profile: "standard", docType: "invoice", doc: "Standard invoice" },
+      { profile: "standard", docType: "credit", doc: "Standard credit note" },
+      { profile: "standard", docType: "debit", doc: "Standard debit note" },
+    );
+    if (it[1] === "1") specs.push(
+      { profile: "simplified", docType: "invoice", doc: "Simplified invoice" },
+      { profile: "simplified", docType: "credit", doc: "Simplified credit note" },
+      { profile: "simplified", docType: "debit", doc: "Simplified debit note" },
+    );
+
+    const results: { doc: string; ok: boolean; status: string; warnings: string[]; errors: string[] }[] = [];
+    let icv = decrypted.icv;
+    let pih = decrypted.pih;
+    for (const s of specs) {
+      icv += 1;
+      let r;
+      try {
+        r = await this.submitComplianceDoc(decrypted, seller, s, icv, pih);
+      } catch (e) {
+        r = { ok: false, httpStatus: 0, status: "ERROR", warnings: [], errors: [((e as Error)?.message || String(e)).slice(0, 500)], hash: pih };
+      }
+      pih = r.hash; // chain the next document onto this one's hash
+      results.push({ doc: s.doc, ok: r.ok, status: r.status, warnings: r.warnings, errors: r.errors });
+    }
+    const passed = results.filter((r) => r.ok).length;
+    return { ok: results.length > 0 && passed === results.length, passed, total: results.length, results };
+  }
+
+  private sellerSnapshotFrom(creds: ZatcaCredentials): SellerSnapshot {
+    return {
+      name: creds.sellerName, nameAr: creds.sellerNameAr, vat: creds.sellerVatNumber, crn: creds.sellerCrn,
+      idScheme: creds.sellerIdScheme,
+      street: creds.sellerStreet, buildingNo: creds.sellerBuildingNo, district: creds.sellerDistrict,
+      city: creds.sellerCity, postalZone: creds.sellerPostalZone, additionalNo: creds.sellerAdditionalNo,
+    };
+  }
+
+  /** Build → sign → submit ONE document to ZATCA's compliance endpoint. */
+  private async submitComplianceDoc(
+    decrypted: DecryptedCreds,
+    seller: SellerSnapshot,
+    spec: { profile: "standard" | "simplified"; docType: "invoice" | "credit" | "debit" },
+    icv: number,
+    pih: string,
+  ): Promise<{ ok: boolean; httpStatus: number; status: string; warnings: string[]; errors: string[]; hash: string }> {
+    const issueDate = todayIsoDate();
+    const issueTime = todayIsoTime();
+    const isNote = spec.docType !== "invoice";
+    const tag = `${spec.profile === "simplified" ? "S" : "T"}${{ invoice: "INV", credit: "CRN", debit: "DBN" }[spec.docType]}`;
+    const built = this.builder.build({
+      profile: spec.profile,
+      docType: spec.docType,
+      invoiceId: `CHK-${tag}-${icv}`,
+      icv,
+      pih,
+      issueDate, issueTime,
+      seller,
+      // Standard (B2B/clearance) needs a registered buyer; simplified (B2C) is minimal.
+      buyer: spec.profile === "standard"
+        ? { name: "Compliance Buyer Co", vat: "399999999900003", street: "Test St", buildingNo: "1234", district: "Test", city: "Riyadh", postalZone: "12345" }
+        : { name: "Walk-in Customer" },
+      lines: [{ id: "1", name: "فحص توافق ZATCA", quantity: 1, unitPrice: 1000, vatPercent: 15, vatCategory: "S" }],
+      // Credit/debit notes must reference an original invoice + carry a reason.
+      billingReference: isNote ? { id: `CHK-${spec.profile === "simplified" ? "S" : "T"}INV-1` } : undefined,
+      instructionNote: isNote ? (spec.docType === "credit" ? "Compliance test credit note" : "Compliance test debit note") : undefined,
+      currency: "SAR",
+    });
+    const signed = await this.signer.signInvoice({
+      invoiceXml: built.xml, privateKeyPem: decrypted.privateKeyPem, certPem: decrypted.certPem, profile: spec.profile,
+      qrFields: {
+        sellerName: seller.name, vatNumber: seller.vat,
+        timestamp: `${issueDate}T${issueTime}`,
+        totalWithVat: built.totals.taxInclusive.toFixed(2), vatTotal: built.totals.taxAmount.toFixed(2),
+      },
+    });
+    let resp;
+    try {
+      resp = await this.api.complianceInvoice({
+        binarySecurityToken: decrypted.binarySecurityToken, secret: decrypted.secret,
+        invoiceHash: signed.invoiceHashBase64, uuid: built.uuid, signedXml: signed.signedXml,
+        environment: decrypted.environment,
+      });
+    } catch (e) {
+      resp = { status: 0, raw: (e as Error).message, json: null, headers: {} } as any;
+    }
+    const j: any = resp.json ?? {};
+    const vr = j.validationResults ?? {};
+    const pick = (arr: any[]) => (Array.isArray(arr) ? arr.map((m) => m?.message || m?.code || String(m)) : []);
+    const errors = pick(vr.errorMessages);
+    const warnings = pick(vr.warningMessages);
+    if (!errors.length && !(resp.status >= 200 && resp.status < 300)) {
+      const raw = (resp as any).raw || (j && Object.keys(j).length ? JSON.stringify(j) : "");
+      errors.push(raw ? `HTTP ${resp.status}: ${String(raw).slice(0, 500)}` : `HTTP ${resp.status}`);
+    }
+    const reportStatus = j.reportingStatus || j.clearanceStatus || vr.status || (resp.status >= 200 && resp.status < 300 ? "PASS" : `HTTP ${resp.status}`);
+    const ok = resp.status >= 200 && resp.status < 300 && errors.length === 0;
+    return { ok, httpStatus: resp.status, status: String(reportStatus), warnings, errors, hash: signed.invoiceHashBase64 };
   }
 
   /* ─── Read APIs ─────────────────────────────────────────────────────── */

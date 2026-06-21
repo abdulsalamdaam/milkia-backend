@@ -34,6 +34,17 @@ export class ZatcaOnboardingController {
     return this.invoices.complianceCheck(scopeId(user), this.oid(body?.ownerId));
   }
 
+  /**
+   * POST /zatca/compliance-suite  { ownerId }
+   * Run the FULL compliance test suite (every document type the CSR declared).
+   * Passing all of them is ZATCA's prerequisite for issuing a production CSID.
+   */
+  @Post("compliance-suite")
+  @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
+  async complianceSuite(@CurrentUser() user: AuthUser, @Body() body: { ownerId?: number }) {
+    return this.invoices.complianceSuite(scopeId(user), this.oid(body?.ownerId));
+  }
+
   /** Parse an optional landlord id (the per-landlord seller). */
   private oid(v: unknown): number | null {
     const n = Number(v);
