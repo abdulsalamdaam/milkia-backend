@@ -9,6 +9,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 import { ZatcaOnboardingService, type SellerProfileInput } from "./services/zatca-onboarding.service";
+import { InvoiceService } from "./services/invoice.service";
 import type { ZatcaEnv } from "./services/zatca-api.service";
 
 @ApiTags("zatca")
@@ -16,7 +17,22 @@ import type { ZatcaEnv } from "./services/zatca-api.service";
 @Controller("zatca")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class ZatcaOnboardingController {
-  constructor(private readonly onboarding: ZatcaOnboardingService) {}
+  constructor(
+    private readonly onboarding: ZatcaOnboardingService,
+    private readonly invoices: InvoiceService,
+  ) {}
+
+  /**
+   * POST /zatca/compliance-check  { ownerId }
+   * Verify a landlord's integration: build + sign a sample invoice and submit
+   * it to ZATCA's compliance endpoint. Returns ZATCA's verdict (pass / errors).
+   * Nothing is persisted.
+   */
+  @Post("compliance-check")
+  @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
+  async complianceCheck(@CurrentUser() user: AuthUser, @Body() body: { ownerId?: number }) {
+    return this.invoices.complianceCheck(scopeId(user), this.oid(body?.ownerId));
+  }
 
   /** Parse an optional landlord id (the per-landlord seller). */
   private oid(v: unknown): number | null {

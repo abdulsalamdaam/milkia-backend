@@ -238,6 +238,64 @@ export class InvoiceService {
     return { invoice, lines: linesRows };
   }
 
+  /**
+   * Verify a landlord's ZATCA integration end-to-end WITHOUT persisting: build
+   * a sample standard invoice with the landlord's seller data, sign it with
+   * their certificate, and submit it to ZATCA's /compliance/invoices. Returns
+   * ZATCA's verdict (pass / warnings / errors) — the definitive "is it working"
+   * check. Nothing is written and the chain (PIH/ICV) is not advanced.
+   */
+  async complianceCheck(userId: number, ownerId: number | null): Promise<{
+    ok: boolean; httpStatus: number; status: string; warnings: string[]; errors: string[];
+  }> {
+    const { creds, decrypted } = await this.onboarding.getActiveCredentials(userId, ownerId);
+    const issueDate = todayIsoDate();
+    const issueTime = todayIsoTime();
+    const sellerSnapshot: SellerSnapshot = {
+      name: creds.sellerName, nameAr: creds.sellerNameAr, vat: creds.sellerVatNumber, crn: creds.sellerCrn,
+      street: creds.sellerStreet, buildingNo: creds.sellerBuildingNo, district: creds.sellerDistrict,
+      city: creds.sellerCity, postalZone: creds.sellerPostalZone, additionalNo: creds.sellerAdditionalNo,
+    };
+    const built = this.builder.build({
+      profile: "standard",
+      docType: "invoice",
+      invoiceId: `CHK-${decrypted.icv + 1}`,
+      icv: decrypted.icv + 1,
+      pih: decrypted.pih,
+      issueDate, issueTime,
+      seller: sellerSnapshot,
+      buyer: { name: "Compliance Check", vat: "399999999900003", street: "Test St", buildingNo: "1234", district: "Test", city: "Riyadh", postalZone: "12345" },
+      lines: [{ id: "1", name: "فحص توافق ZATCA", quantity: 1, unitPrice: 1000, vatPercent: 15, vatCategory: "S" }],
+      currency: "SAR",
+    });
+    const signed = await this.signer.signInvoice({
+      invoiceXml: built.xml, privateKeyPem: decrypted.privateKeyPem, certPem: decrypted.certPem, profile: "standard",
+      qrFields: {
+        sellerName: sellerSnapshot.name, vatNumber: sellerSnapshot.vat,
+        timestamp: `${issueDate}T${issueTime}`,
+        totalWithVat: built.totals.taxInclusive.toFixed(2), vatTotal: built.totals.taxAmount.toFixed(2),
+      },
+    });
+    let resp;
+    try {
+      resp = await this.api.complianceInvoice({
+        binarySecurityToken: decrypted.binarySecurityToken, secret: decrypted.secret,
+        invoiceHash: signed.invoiceHashBase64, uuid: built.uuid, signedXml: signed.signedXml,
+        environment: decrypted.environment,
+      });
+    } catch (e) {
+      resp = { status: 0, raw: (e as Error).message, json: null, headers: {} } as any;
+    }
+    const j: any = resp.json ?? {};
+    const vr = j.validationResults ?? {};
+    const pick = (arr: any[]) => (Array.isArray(arr) ? arr.map((m) => m?.message || m?.code || String(m)) : []);
+    const errors = pick(vr.errorMessages);
+    const warnings = pick(vr.warningMessages);
+    const reportStatus = j.reportingStatus || j.clearanceStatus || vr.status || (resp.status >= 200 && resp.status < 300 ? "PASS" : `HTTP ${resp.status}`);
+    const ok = resp.status >= 200 && resp.status < 300 && errors.length === 0;
+    return { ok, httpStatus: resp.status, status: String(reportStatus), warnings, errors };
+  }
+
   /* ─── Read APIs ─────────────────────────────────────────────────────── */
 
   async list(userId: number, opts: { limit?: number; offset?: number } = {}): Promise<Invoice[]> {
