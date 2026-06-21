@@ -7,6 +7,7 @@ import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTabl
 import {
   simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
+  tenantsTable, ownersTable,
   type BuyerSnapshot,
 } from "@oqudk/database";
 import type { InvoiceLineInput } from "../invoice/services/invoice-builder.service";
@@ -641,7 +642,38 @@ class SimpleInvoicesController {
 
       const lines = this.zatcaLinesFromDoc(doc);
       if (!lines.length) { this.logger.debug(`ZATCA: ${doc.number} skipped — no line items`); return; }
-      const buyer = this.buyerSnapshotFromDoc(doc, contract);
+
+      // Buyer's full structured address comes from the tenant record (rent) or
+      // the landlord/owner record (commission) — both store a national address —
+      // so B2B invoices carry the city/district/street ZATCA requires (BR-KSA-63).
+      let buyer: BuyerSnapshot;
+      if (doc.kind === "commission") {
+        const owner = ownerId ? (await this.db.select().from(ownersTable)
+          .where(and(eq(ownersTable.id, ownerId), eq(ownersTable.userId, uid))))[0] ?? null : null;
+        buyer = this.buyerFromParty(doc, {
+          name: doc.tenantName || contract?.landlordName || owner?.name,
+          vat: owner?.taxNumber || contract?.landlordTaxNumber,
+          street: owner?.nationalAddressStreet || contract?.landlordAddress,
+          buildingNo: owner?.buildingNumber || contract?.landlordBuildingNumber,
+          district: owner?.nationalAddressDistrict || null,
+          city: owner?.nationalAddressCity || null,
+          postalZone: owner?.postalCode || contract?.landlordPostalCode,
+          additionalNo: owner?.additionalNumber || contract?.landlordAdditionalNumber,
+        });
+      } else {
+        const tenant = doc.tenantId ? (await this.db.select().from(tenantsTable)
+          .where(and(eq(tenantsTable.id, Number(doc.tenantId)), eq(tenantsTable.userId, uid))))[0] ?? null : null;
+        buyer = this.buyerFromParty(doc, {
+          name: doc.tenantName || tenant?.name || contract?.tenantName,
+          vat: doc.client?.vatNumber || tenant?.taxNumber || contract?.tenantTaxNumber,
+          street: tenant?.nationalAddressStreet || contract?.tenantAddress || tenant?.address,
+          buildingNo: tenant?.buildingNumber || contract?.tenantBuildingNumber,
+          district: tenant?.nationalAddressDistrict || null,
+          city: tenant?.nationalAddressCity || null,
+          postalZone: tenant?.postalCode || contract?.tenantPostalCode,
+          additionalNo: tenant?.additionalNumber || contract?.tenantAdditionalNumber,
+        });
+      }
       // B2B (buyer has a VAT number) → standard/clearance; otherwise simplified/reporting.
       const profile: "standard" | "simplified" = buyer?.vat ? "standard" : "simplified";
 
@@ -696,30 +728,22 @@ class SimpleInvoicesController {
     });
   }
 
-  /** Buyer for the ZATCA invoice: tenant for rent, landlord for commission. */
-  private buyerSnapshotFromDoc(doc: any, contract: any | null): BuyerSnapshot {
-    const c = doc.client || {};
-    if (doc.kind === "commission") {
-      return {
-        name: doc.tenantName || contract?.landlordName || "المؤجر",
-        vat: c.vatNumber || contract?.landlordTaxNumber || null,
-        street: contract?.landlordAddress || c.address || null,
-        buildingNo: contract?.landlordBuildingNumber || null,
-        district: null,
-        city: null,
-        postalZone: contract?.landlordPostalCode || null,
-        additionalNo: contract?.landlordAdditionalNumber || null,
-      };
-    }
+  /** Normalize a resolved party into a ZATCA BuyerSnapshot (blanks → null). */
+  private buyerFromParty(
+    doc: any,
+    p: { name?: string | null; vat?: string | null; street?: string | null; buildingNo?: string | null;
+         district?: string | null; city?: string | null; postalZone?: string | null; additionalNo?: string | null },
+  ): BuyerSnapshot {
+    const blank = (v: string | null | undefined) => { const s = (v ?? "").toString().trim(); return s || null; };
     return {
-      name: doc.tenantName || contract?.tenantName || c.name || "العميل",
-      vat: c.vatNumber || contract?.tenantTaxNumber || null,
-      street: contract?.tenantAddress || c.address || null,
-      buildingNo: contract?.tenantBuildingNumber || null,
-      district: null,
-      city: null,
-      postalZone: contract?.tenantPostalCode || null,
-      additionalNo: contract?.tenantAdditionalNumber || null,
+      name: blank(p.name) || doc.client?.name || (doc.kind === "commission" ? "المؤجر" : "العميل"),
+      vat: blank(p.vat),
+      street: blank(p.street) || doc.client?.address || null,
+      buildingNo: blank(p.buildingNo),
+      district: blank(p.district),
+      city: blank(p.city),
+      postalZone: blank(p.postalZone),
+      additionalNo: blank(p.additionalNo),
     };
   }
 
