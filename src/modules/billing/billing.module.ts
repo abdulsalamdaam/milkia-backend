@@ -532,18 +532,11 @@ class SimpleInvoicesController {
         if (refInv) {
           const newSubtotal = Math.max(0, round2(Number(refInv.subtotal) + sign * Number(doc.subtotal)));
           const newTotal = Math.max(0, round2(Number(refInv.total) + sign * Number(doc.total)));
-          // Append an adjustment LINE for the note so the invoice's line items
-          // still reconcile with its (now reduced/increased) subtotal + total —
-          // otherwise the lines keep their original values while the totals
-          // change, and the document no longer adds up. The line carries VAT
-          // only if the note itself did, so the per-line tax stays consistent.
-          const noteHasVat = round2(Number(doc.total) - Number(doc.subtotal)) > 0.01;
-          const adjAmount = round2(sign * Number(doc.subtotal));
-          const adjLine = {
-            description: `${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
-            quantity: 1, unitPrice: adjAmount, amount: adjAmount, vat: noteHasVat,
-          };
-          const prevItems = Array.isArray(refInv.items) ? refInv.items : [];
+          // Reflect the note's VALUE on the referenced invoice (subtotal/total),
+          // WITHOUT adding an adjustment line — the credit/debit note document
+          // itself is the record of the change (ZATCA: the note is a separate
+          // document that references the original via billingReference). The
+          // original invoice's own line items are left untouched.
           // If the new total exceeds what's already been collected (a debit note
           // on a paid invoice), re-open it: clear the paid stamp so it shows as
           // partially paid and the Collect action works again.
@@ -552,7 +545,6 @@ class SimpleInvoicesController {
           const refCollected = round2(Number(refColl?.total ?? 0));
           const reopen = refCollected < newTotal - 0.01;
           await this.db.update(simpleInvoicesTable).set({
-            items: [...prevItems, adjLine],
             subtotal: newSubtotal.toFixed(2),
             total: newTotal.toFixed(2),
             ...(reopen ? { paidDate: null } : {}),
