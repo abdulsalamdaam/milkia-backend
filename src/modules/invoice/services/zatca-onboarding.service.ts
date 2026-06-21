@@ -21,6 +21,20 @@ function wrapPem(b64: string, kind: "CERTIFICATE" | "PUBLIC KEY" | "EC PRIVATE K
   return `-----BEGIN ${kind}-----\n${lines.join("\n")}\n-----END ${kind}-----\n`;
 }
 
+/**
+ * ZATCA's `binarySecurityToken` is base64 of the certificate's *inner* base64
+ * body (the text between the PEM headers). Decoding it once yields that bare
+ * base64 — NOT a full PEM — so it must be re-wrapped in BEGIN/END CERTIFICATE
+ * lines. (Some envs return a full PEM already; handle both.) Wrapping the raw
+ * token instead double-encodes the body and openssl rejects it with
+ * "Unable to load certificate".
+ */
+export function tokenToCertPem(token: string): string {
+  const decoded = Buffer.from(token, "base64").toString("utf8").trim();
+  if (decoded.includes("BEGIN CERTIFICATE")) return decoded.endsWith("\n") ? decoded : decoded + "\n";
+  return wrapPem(decoded.replace(/\s+/g, ""), "CERTIFICATE");
+}
+
 export interface SellerProfileInput {
   sellerName: string;
   sellerNameAr?: string | null;
@@ -217,8 +231,7 @@ export class ZatcaOnboardingService {
     }
 
     // binarySecurityToken from ZATCA is base64 of an X.509 cert — wrap as PEM.
-    const certBody = Buffer.from(j.binarySecurityToken, "base64").toString("utf8");
-    const certPem = certBody.includes("BEGIN CERTIFICATE") ? certBody : wrapPem(j.binarySecurityToken, "CERTIFICATE");
+    const certPem = tokenToCertPem(j.binarySecurityToken);
 
     const updates: Partial<ZatcaCredentials> = {};
     if (environment === "sandbox") {
@@ -294,10 +307,7 @@ export class ZatcaOnboardingService {
     if (resp.status >= 300 || !resp.json?.binarySecurityToken) {
       throw new BadRequestException(`ZATCA /production/csids returned ${resp.status}: ${resp.raw}`);
     }
-    const certBody = Buffer.from(resp.json.binarySecurityToken, "base64").toString("utf8");
-    const certPem = certBody.includes("BEGIN CERTIFICATE")
-      ? certBody
-      : wrapPem(resp.json.binarySecurityToken, "CERTIFICATE");
+    const certPem = tokenToCertPem(resp.json.binarySecurityToken);
 
     await this.db
       .update(zatcaCredentialsTable)
@@ -388,7 +398,9 @@ export class ZatcaOnboardingService {
       creds,
       decrypted: {
         privateKeyPem: decryptString(privateKeyEnc),
-        certPem,
+        // Re-derive the PEM from the token (the source of truth) so rows stored
+        // by the earlier double-encoding bug self-heal without a migration.
+        certPem: tokenToCertPem(token),
         binarySecurityToken: token,
         secret: decryptString(secretEnc),
         icv: isSandbox ? creds.sandboxIcv : creds.prodIcv,
