@@ -178,13 +178,37 @@ class SimpleInvoicesController {
     for (const v of voucherAgg as Array<{ invoiceId: number | null; receiptNumber: string | null; total: string | null }>) {
       if (v.invoiceId != null && v.receiptNumber) voucherMap.set(`${v.invoiceId}|${v.receiptNumber}`, Number(v.total ?? 0));
     }
+
+    // Per-invoice net of confirmed credit/debit notes that REFERENCE it (by
+    // number). The original tax invoice is immutable (ZATCA) — so its `total`
+    // stays the gross issued amount, and the NET obligation is computed here:
+    //   netTotal = total − Σ credit notes + Σ debit notes
+    // This is how the value is "reflected" without ever rewriting the invoice.
+    const invNumbers = (rows as any[]).filter((r) => r.type === "invoice").map((r) => r.number as string);
+    const noteAgg = invNumbers.length
+      ? await this.db.select({ ref: simpleInvoicesTable.billingReference, type: simpleInvoicesTable.type, total: sum(simpleInvoicesTable.total) })
+          .from(simpleInvoicesTable)
+          .where(and(base, inArray(simpleInvoicesTable.type, ["credit", "debit"] as any),
+            eq(simpleInvoicesTable.status, "confirmed"), inArray(simpleInvoicesTable.billingReference, invNumbers)))
+          .groupBy(simpleInvoicesTable.billingReference, simpleInvoicesTable.type)
+      : [];
+    const noteMap = new Map<string, number>();
+    for (const n of noteAgg as Array<{ ref: string | null; type: string; total: string | null }>) {
+      if (!n.ref) continue;
+      const signed = (n.type === "credit" ? -1 : 1) * Number(n.total ?? 0);
+      noteMap.set(n.ref, round2((noteMap.get(n.ref) ?? 0) + signed));
+    }
+
     const data = (rows as any[]).map((r) => {
       const collected = round2(collMap.get(r.id) ?? 0);
       const isVoucherDoc = r.kind === "receipt" || r.kind === "deposit";
       const voucherAmount = isVoucherDoc
         ? round2(Number(r.total))
         : (r.receiptNumber ? round2(voucherMap.get(`${r.id}|${r.receiptNumber}`) ?? collected) : collected);
-      return { ...r, collectedAmount: collected, voucherAmount };
+      const notesAdjustment = r.type === "invoice" ? round2(noteMap.get(r.number) ?? 0) : 0;
+      const netTotal = round2(Number(r.total) + notesAdjustment);
+      const balanceDue = Math.max(0, round2(netTotal - collected));
+      return { ...r, collectedAmount: collected, voucherAmount, notesAdjustment, netTotal, balanceDue };
     });
     return { data, page: q.page, pageSize: q.pageSize, total, stats };
   }
@@ -195,9 +219,24 @@ class SimpleInvoicesController {
     const [doc] = await this.db.select().from(simpleInvoicesTable)
       .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, scopeId(user)), isNull(simpleInvoicesTable.deletedAt)));
     if (!doc) throw new NotFoundException("Document not found");
+    const uid = scopeId(user);
     const [agg] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
       .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, doc.id));
-    return { ...doc, collectedAmount: round2(Number(agg?.total ?? 0)) };
+    const collected = round2(Number(agg?.total ?? 0));
+    // Net of confirmed credit/debit notes referencing this invoice (immutable).
+    let notesAdjustment = 0;
+    if (doc.type === "invoice") {
+      const [c] = await this.db.select({ total: sum(simpleInvoicesTable.total) }).from(simpleInvoicesTable)
+        .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "credit"),
+          eq(simpleInvoicesTable.billingReference, doc.number), eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt)));
+      const [d] = await this.db.select({ total: sum(simpleInvoicesTable.total) }).from(simpleInvoicesTable)
+        .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "debit"),
+          eq(simpleInvoicesTable.billingReference, doc.number), eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt)));
+      notesAdjustment = round2(-Number(c?.total ?? 0) + Number(d?.total ?? 0));
+    }
+    const netTotal = round2(Number(doc.total) + notesAdjustment);
+    const balanceDue = Math.max(0, round2(netTotal - collected));
+    return { ...doc, collectedAmount: collected, notesAdjustment, netTotal, balanceDue };
   }
 
   @Post()
@@ -547,32 +586,23 @@ class SimpleInvoicesController {
           .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "invoice"),
             eq(simpleInvoicesTable.number, doc.billingReference), isNull(simpleInvoicesTable.deletedAt)));
         if (refInv) {
-          const newSubtotal = Math.max(0, round2(Number(refInv.subtotal) + sign * Number(doc.subtotal)));
-          const newTotal = Math.max(0, round2(Number(refInv.total) + sign * Number(doc.total)));
-          // Reflect the note's VALUE on the referenced invoice (subtotal/total),
-          // WITHOUT adding an adjustment line — the credit/debit note document
-          // itself is the record of the change (ZATCA: the note is a separate
-          // document that references the original via billingReference). The
-          // original invoice's own line items are left untouched.
-          // If the new total exceeds what's already been collected (a debit note
-          // on a paid invoice), re-open it: clear the paid stamp so it shows as
-          // partially paid and the Collect action works again.
-          const [refColl] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
-            .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, refInv.id));
-          const refCollected = round2(Number(refColl?.total ?? 0));
-          const reopen = refCollected < newTotal - 0.01;
-          await this.db.update(simpleInvoicesTable).set({
-            subtotal: newSubtotal.toFixed(2),
-            total: newTotal.toFixed(2),
-            ...(reopen ? { paidDate: null } : {}),
-            notes: `${refInv.notes ? refInv.notes + " · " : ""}${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
-          }).where(eq(simpleInvoicesTable.id, refInv.id));
-          // Adjust the referenced invoice's installment amount accordingly.
+          // ZATCA + accounting best practice: a tax invoice is an IMMUTABLE
+          // legal document. Once issued (and reported/cleared), its subtotal and
+          // total are frozen forever — we must NOT rewrite them. The credit/debit
+          // note is a separate legal document (submitted to ZATCA on its own)
+          // that references the original via billingReference. The value is
+          // reflected in the COLLECTIBLE, not in the invoice's frozen figures:
+          //   net obligation = invoice total + Σ(signed confirmed notes)
+          // We adjust the internal installment schedule (not a legal document)
+          // and sync the invoice's paid flag — but never its money fields.
+          const noteTotal = sign * Number(doc.total);
+
+          // 1) Internal installment schedule reflects the new amount to collect.
           if (refInv.paymentId) {
             const [payment] = await this.db.select().from(paymentsTable)
               .where(and(eq(paymentsTable.id, refInv.paymentId), eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
             if (payment && payment.status !== "cancelled") {
-              const newAmount = Math.max(0, round2(Number(payment.amount) + sign * Number(doc.total)));
+              const newAmount = Math.max(0, round2(Number(payment.amount) + noteTotal));
               const prior = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
                 .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, payment.id));
               const collected = round2(Number(prior[0]?.total ?? 0));
@@ -584,6 +614,37 @@ class SimpleInvoicesController {
               }).where(eq(paymentsTable.id, payment.id));
             }
           }
+
+          // 2) Net obligation from the immutable invoice + ALL confirmed notes
+          //    (including this one), to sync the invoice's paid flag only.
+          const [noteAgg] = await this.db
+            .select({ total: sum(simpleInvoicesTable.total) })
+            .from(simpleInvoicesTable)
+            .where(and(
+              eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "credit"),
+              eq(simpleInvoicesTable.billingReference, refInv.number),
+              eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt),
+            ));
+          const [debitAgg] = await this.db
+            .select({ total: sum(simpleInvoicesTable.total) })
+            .from(simpleInvoicesTable)
+            .where(and(
+              eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "debit"),
+              eq(simpleInvoicesTable.billingReference, refInv.number),
+              eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt),
+            ));
+          // This note isn't confirmed yet at this point — fold its value in.
+          const confirmedNotes = round2(-Number(noteAgg?.total ?? 0) + Number(debitAgg?.total ?? 0) + noteTotal);
+          const netDue = Math.max(0, round2(Number(refInv.total) + confirmedNotes));
+          const [refColl] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+            .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, refInv.id));
+          const refCollected = round2(Number(refColl?.total ?? 0));
+          const fullyPaid = netDue > 0 && refCollected >= netDue - 0.01;
+          await this.db.update(simpleInvoicesTable).set({
+            // money fields untouched — only the paid flag + audit trail.
+            paidDate: fullyPaid ? (refInv.paidDate ?? today()) : null,
+            notes: `${refInv.notes ? refInv.notes + " · " : ""}${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
+          }).where(eq(simpleInvoicesTable.id, refInv.id));
         }
       }
       // A note keeps its own document number (CRN-/DBN-). It is NOT a receipt
