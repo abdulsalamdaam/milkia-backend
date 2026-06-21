@@ -29,6 +29,15 @@ export interface SendEmailInput {
   replyTo?: string;
   /** Optional override of the configured "from" address. */
   from?: string;
+  /**
+   * `true` only for genuine bulk/marketing mail (newsletters, campaigns). When
+   * set, the message carries List-Unsubscribe headers. Transactional mail (OTP,
+   * welcome, verification, receipts) MUST leave this false — those headers are
+   * what make Gmail classify a message as bulk/"newsletter"/Promotions.
+   */
+  marketing?: boolean;
+  /** Resend tag for categorising the send (e.g. "otp", "welcome"). */
+  category?: string;
 }
 
 export interface MaintenanceEmailPayload {
@@ -87,15 +96,17 @@ export class EmailService {
       return false;
     }
     try {
-      // List-Unsubscribe is added on every send. Even on transactional OTP
-      // codes the cost is zero (real recipients won't click it) and the
-      // header reliably nudges spam filters in our favor.
-      const customHeaders: Record<string, string> = {
-        "List-Unsubscribe": `<mailto:${this.listUnsubscribeMailto}?subject=unsubscribe>, <${this.listUnsubscribeUrl}>`,
-        "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
-      };
+      // List-Unsubscribe is added ONLY to genuine bulk/marketing mail. On
+      // transactional mail (OTP, welcome, verification) these headers make Gmail
+      // file the message as bulk/"newsletter"/Promotions — so we omit them and
+      // tag the send as transactional instead.
+      const customHeaders: Record<string, string> = {};
+      if (input.marketing) {
+        customHeaders["List-Unsubscribe"] = `<mailto:${this.listUnsubscribeMailto}?subject=unsubscribe>, <${this.listUnsubscribeUrl}>`;
+        customHeaders["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click";
+      }
       const fromAddress = input.from || this.from;
-      this.log.log(`Resend send → from=${fromAddress} to=${Array.isArray(input.to) ? input.to.join(",") : input.to} subject=${input.subject}`);
+      this.log.log(`Resend send → from=${fromAddress} to=${Array.isArray(input.to) ? input.to.join(",") : input.to} subject=${input.subject} category=${input.category ?? (input.marketing ? "marketing" : "transactional")}`);
       const res = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
@@ -110,6 +121,7 @@ export class EmailService {
           text: input.text,
           reply_to: input.replyTo || this.replyTo,
           headers: customHeaders,
+          tags: [{ name: "category", value: input.category || (input.marketing ? "marketing" : "transactional") }],
         }),
       });
       if (!res.ok) {
@@ -154,6 +166,7 @@ export class EmailService {
       subject: `رمز الدخول · Oqudk login code: ${code}`,
       html,
       text: `Your Oqudk login code: ${code}\nValid for ${ttlMinutes} minutes.`,
+      category: "otp_login",
     });
   }
 
@@ -266,6 +279,7 @@ export class EmailService {
       subject: "أهلاً بك في عقودك",
       html,
       text: `مرحباً ${name}، شكراً لتسجيلك في عقودك. سيقوم فريقنا بمراجعة حسابك وتفعيله قريباً.`,
+      category: "welcome",
     });
   }
 
