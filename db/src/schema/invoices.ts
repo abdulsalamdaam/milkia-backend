@@ -1,11 +1,13 @@
 import {
   pgTable, text, serial, timestamp, integer, jsonb, date, pgEnum, boolean, uniqueIndex, index,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
 import { contractsTable } from "./contracts";
 import { paymentsTable } from "./payments";
+import { ownersTable } from "./owners";
 import { zatcaEnvEnum } from "./zatcaCredentials";
 
 export const invoiceProfileEnum = pgEnum("invoice_profile", ["standard", "simplified"]);
@@ -66,6 +68,10 @@ export const invoicesTable = pgTable("invoices", {
 
   contractId: integer("contract_id").references(() => contractsTable.id, { onDelete: "set null" }),
   paymentId: integer("payment_id").references(() => paymentsTable.id, { onDelete: "set null" }),
+  /** The landlord (seller) this invoice was issued for. Null = account-level
+   *  seller. Each landlord keeps its OWN ICV/PIH chain, so uniqueness below is
+   *  scoped per landlord. */
+  ownerId: integer("owner_id").references(() => ownersTable.id, { onDelete: "set null" }),
 
   profile: invoiceProfileEnum("profile").notNull(),
   docType: invoiceDocTypeEnum("doc_type").notNull().default("invoice"),
@@ -111,8 +117,10 @@ export const invoicesTable = pgTable("invoices", {
 }, (t) => ({
   // Invoice numbers must be unique per seller (across all envs).
   invoiceNumberUniq: uniqueIndex("invoices_user_invoice_number_uniq").on(t.userId, t.invoiceNumber),
-  // ICV must be unique per (seller, environment) — chain integrity.
-  icvUniq: uniqueIndex("invoices_user_env_icv_uniq").on(t.userId, t.environment, t.icv),
+  // ICV must be unique per (landlord seller, environment) — each landlord has
+  // its OWN ICV/PIH chain, so account-level (owner_id null → 0) and every
+  // landlord get independent sequences.
+  icvUniq: uniqueIndex("invoices_user_owner_env_icv_uniq").on(t.userId, sql`coalesce(${t.ownerId}, 0)`, t.environment, t.icv),
   byUser: index("invoices_user_idx").on(t.userId, t.createdAt),
   byContract: index("invoices_contract_idx").on(t.contractId),
   byPayment: index("invoices_payment_idx").on(t.paymentId),

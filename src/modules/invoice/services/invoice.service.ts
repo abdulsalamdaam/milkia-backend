@@ -163,6 +163,7 @@ export class InvoiceService {
       .insert(invoicesTable)
       .values({
         userId,
+        ownerId,
         invoiceNumber: dto.invoiceNumber,
         uuid: built.uuid,
         contractId: dto.contractId ?? null,
