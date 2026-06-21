@@ -126,6 +126,14 @@ class AdminController {
         .innerJoin(propertiesTable, eq(unitsTable.propertyId, propertiesTable.id))
         .where(eq(propertiesTable.userId, user.id));
       const [contractCount] = await this.db.select({ count: count() }).from(contractsTable).where(eq(contractsTable.userId, user.id));
+      // Linked people under this account — visible to the admin as counts and
+      // drilled into via GET /admin/companies/:id/members.
+      const [empCount] = await this.db.select({ count: count() }).from(usersTable)
+        .where(and(eq(usersTable.ownerUserId, user.id), isNull(usersTable.deletedAt)));
+      const [landlordCount] = await this.db.select({ count: count() }).from(ownersTable)
+        .where(and(eq(ownersTable.userId, user.id), isNull(ownersTable.deletedAt)));
+      const [tenantCount] = await this.db.select({ count: count() }).from(tenantsTable)
+        .where(and(eq(tenantsTable.userId, user.id), isNull(tenantsTable.deletedAt)));
       return {
         id: user.id,
         name: user.companyName || user.name,
@@ -137,9 +145,33 @@ class AdminController {
         propertiesCount: Number(propCount?.count ?? 0),
         unitsCount: Number(unitCount?.count ?? 0),
         contractsCount: Number(contractCount?.count ?? 0),
+        employeesCount: Number(empCount?.count ?? 0),
+        landlordsCount: Number(landlordCount?.count ?? 0),
+        tenantsCount: Number(tenantCount?.count ?? 0),
         createdAt: user.createdAt,
       };
     }));
+  }
+
+  /**
+   * GET /admin/companies/:id/members
+   * Everyone linked to a customer account: its employees (sub-users), the
+   * landlords (owners) it manages, and its tenants — so the admin can see the
+   * full picture behind each account, not just the account owner.
+   */
+  @Get("companies/:id/members")
+  async companyMembers(@Param("id") id: string) {
+    const uid = parseInt(id, 10);
+    const [employees, landlords, tenants] = await Promise.all([
+      this.db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, phone: usersTable.phone, isActive: usersTable.isActive, role: rolesTable.key, createdAt: usersTable.createdAt })
+        .from(usersTable).leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+        .where(and(eq(usersTable.ownerUserId, uid), isNull(usersTable.deletedAt))).orderBy(desc(usersTable.createdAt)),
+      this.db.select({ id: ownersTable.id, name: ownersTable.name, type: ownersTable.type, phone: ownersTable.phone, email: ownersTable.email, taxNumber: ownersTable.taxNumber, createdAt: ownersTable.createdAt })
+        .from(ownersTable).where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt))).orderBy(desc(ownersTable.createdAt)),
+      this.db.select({ id: tenantsTable.id, name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email, taxNumber: tenantsTable.taxNumber, status: tenantsTable.status, createdAt: tenantsTable.createdAt })
+        .from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt))).orderBy(desc(tenantsTable.createdAt)),
+    ]);
+    return { employees, landlords, tenants };
   }
 
   @Patch("companies/:id")
