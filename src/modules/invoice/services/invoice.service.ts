@@ -19,6 +19,8 @@ import { ZatcaOnboardingService, type DecryptedCreds } from "./zatca-onboarding.
 
 export interface CreateInvoiceDto {
   invoiceNumber: string;
+  /** Per-landlord seller (matches the ZATCA credentials row); null = account-level. */
+  ownerId?: number | null;
   profile: "standard" | "simplified";
   docType?: "invoice" | "credit" | "debit";
   language?: "ar" | "en";
@@ -83,24 +85,13 @@ export class InvoiceService {
       );
     if (existing) throw new ConflictException(`Invoice number ${dto.invoiceNumber} already exists`);
 
-    const { creds, decrypted } = await this.onboarding.getActiveCredentials(userId);
+    const ownerId = dto.ownerId ?? null;
+    const { creds, decrypted } = await this.onboarding.getActiveCredentials(userId, ownerId);
     const nextIcv = decrypted.icv + 1;
     const issueDate = todayIsoDate();
     const issueTime = todayIsoTime();
 
-    const sellerSnapshot: SellerSnapshot = {
-      name: creds.sellerName,
-      nameAr: creds.sellerNameAr,
-      vat: creds.sellerVatNumber,
-      crn: creds.sellerCrn,
-      idScheme: creds.sellerIdScheme,
-      street: creds.sellerStreet,
-      buildingNo: creds.sellerBuildingNo,
-      district: creds.sellerDistrict,
-      city: creds.sellerCity,
-      postalZone: creds.sellerPostalZone,
-      additionalNo: creds.sellerAdditionalNo,
-    };
+    const sellerSnapshot: SellerSnapshot = this.sellerSnapshotFrom(creds);
 
     const built = this.builder.build({
       profile: dto.profile,
@@ -235,6 +226,7 @@ export class InvoiceService {
       decrypted.environment,
       nextIcv,
       signed.invoiceHashBase64,
+      ownerId,
     );
 
     return { invoice, lines: linesRows };
