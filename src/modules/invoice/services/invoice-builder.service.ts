@@ -202,7 +202,7 @@ export class InvoiceBuilderService {
     <cac:Party>
       ${
         seller.crn
-          ? `<cac:PartyIdentification><cbc:ID schemeID="CRN">${escapeXml(seller.crn)}</cbc:ID></cac:PartyIdentification>`
+          ? `<cac:PartyIdentification><cbc:ID schemeID="${escapeXml(seller.idScheme || "CRN")}">${escapeXml(seller.crn)}</cbc:ID></cac:PartyIdentification>`
           : ""
       }
       ${addressXml(seller as unknown as Record<string, unknown>)}

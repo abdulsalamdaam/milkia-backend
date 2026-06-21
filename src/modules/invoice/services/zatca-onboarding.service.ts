@@ -40,6 +40,7 @@ export interface SellerProfileInput {
   sellerNameAr?: string | null;
   sellerVatNumber: string;
   sellerCrn?: string | null;
+  sellerIdScheme?: string | null;
   sellerStreet: string;
   sellerBuildingNo: string;
   sellerDistrict: string;
@@ -143,6 +144,7 @@ export class ZatcaOnboardingService {
           sellerNameAr: profile.sellerNameAr ?? null,
           sellerVatNumber: profile.sellerVatNumber,
           sellerCrn: profile.sellerCrn ?? null,
+          sellerIdScheme: profile.sellerIdScheme ?? "CRN",
           sellerStreet: profile.sellerStreet,
           sellerBuildingNo: profile.sellerBuildingNo,
           sellerDistrict: profile.sellerDistrict,
@@ -172,6 +174,7 @@ export class ZatcaOnboardingService {
         sellerNameAr: profile.sellerNameAr ?? null,
         sellerVatNumber: profile.sellerVatNumber,
         sellerCrn: profile.sellerCrn ?? null,
+        sellerIdScheme: profile.sellerIdScheme ?? "CRN",
         sellerStreet: profile.sellerStreet,
         sellerBuildingNo: profile.sellerBuildingNo,
         sellerDistrict: profile.sellerDistrict,

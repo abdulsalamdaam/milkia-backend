@@ -70,6 +70,7 @@ export class ZatcaOnboardingController {
         nameAr: c.sellerNameAr,
         vatNumber: c.sellerVatNumber,
         crn: c.sellerCrn,
+        idScheme: c.sellerIdScheme,
         street: c.sellerStreet,
         buildingNo: c.sellerBuildingNo,
         district: c.sellerDistrict,

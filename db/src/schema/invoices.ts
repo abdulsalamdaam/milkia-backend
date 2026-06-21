@@ -27,6 +27,8 @@ export const invoiceStatusEnum = pgEnum("invoice_status", [
 export type SellerSnapshot = {
   name: string; nameAr?: string | null;
   vat: string; crn?: string | null;
+  /** BT-29-1 scheme for the seller identification: CRN | MOM | MLS | SAG | OTH | 700. Defaults to CRN. */
+  idScheme?: string | null;
   street: string; buildingNo: string; district: string; city: string;
   postalZone: string; additionalNo?: string | null;
   logoUrl?: string | null;

@@ -50,6 +50,8 @@ export const zatcaCredentialsTable = pgTable("zatca_credentials", {
   sellerNameAr: text("seller_name_ar"),
   sellerVatNumber: text("seller_vat_number").notNull(),
   sellerCrn: text("seller_crn"),
+  /** BT-29-1 scheme for sellerCrn: CRN (commercial reg) | MOM | MLS | SAG | OTH | 700. */
+  sellerIdScheme: text("seller_id_scheme").default("CRN"),
   sellerStreet: text("seller_street").notNull(),
   sellerBuildingNo: text("seller_building_no").notNull(),
   sellerDistrict: text("seller_district").notNull(),

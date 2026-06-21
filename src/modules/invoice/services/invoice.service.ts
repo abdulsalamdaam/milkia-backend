@@ -92,6 +92,7 @@ export class InvoiceService {
       nameAr: creds.sellerNameAr,
       vat: creds.sellerVatNumber,
       crn: creds.sellerCrn,
+      idScheme: creds.sellerIdScheme,
       street: creds.sellerStreet,
       buildingNo: creds.sellerBuildingNo,
       district: creds.sellerDistrict,
@@ -257,6 +258,7 @@ export class InvoiceService {
       const issueTime = todayIsoTime();
       const sellerSnapshot: SellerSnapshot = {
         name: creds.sellerName, nameAr: creds.sellerNameAr, vat: creds.sellerVatNumber, crn: creds.sellerCrn,
+        idScheme: creds.sellerIdScheme,
         street: creds.sellerStreet, buildingNo: creds.sellerBuildingNo, district: creds.sellerDistrict,
         city: creds.sellerCity, postalZone: creds.sellerPostalZone, additionalNo: creds.sellerAdditionalNo,
       };
