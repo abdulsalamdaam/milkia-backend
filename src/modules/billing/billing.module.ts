@@ -36,7 +36,7 @@ type LineItem = { description: string; quantity: number; unitPrice: number; amou
 /** Result of the best-effort ZATCA mirror on approval — surfaced to the UI. */
 type ZatcaSubmitOutcome =
   | { submitted: true; status: string; profile: string; environment: string; httpStatus: number; invoiceId: number; warnings: number }
-  | { submitted: false; code: "not_linked" | "not_onboarded" | "no_items" | "error"; reason: string };
+  | { submitted: false; code: "not_linked" | "not_onboarded" | "no_items" | "skipped" | "error"; reason: string };
 
 function normalizeItems(raw: any): LineItem[] {
   if (!Array.isArray(raw)) return [];
@@ -654,9 +654,12 @@ class SimpleInvoicesController {
    */
   private async submitApprovedDocToZatca(uid: number, doc: any): Promise<ZatcaSubmitOutcome> {
     try {
-      // Resolve the landlord (owner) that is the ZATCA seller. A commission
-      // invoice is issued BY the managing account (seller = account-level).
-      const ownerId = doc.kind === "commission" ? null : await this.resolveOwnerId(uid, doc.contractId);
+      // Commission invoices (فاتورة عمولة) are intentionally NOT sent to ZATCA.
+      if (doc.kind === "commission") {
+        return { submitted: false, code: "skipped", reason: "Commission invoices are not sent to ZATCA" };
+      }
+      // Resolve the landlord (owner) that is the ZATCA seller.
+      const ownerId = await this.resolveOwnerId(uid, doc.contractId);
 
       // Only proceed if that seller is configured AND onboarded for its active env.
       const creds = await this.zatcaOnboarding.getCredentials(uid, ownerId);
