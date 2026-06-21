@@ -15,7 +15,7 @@ import { PermissionsGuard, RequirePermissions } from "../../common/permissions.d
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
 
-const PAYMENT_STATUSES = ["paid", "pending", "overdue", "cancelled", "partially_paid"];
+const PAYMENT_STATUSES = ["paid", "pending", "overdue", "cancelled", "partially_paid", "settled_external"];
 const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 @ApiTags("payments")
@@ -195,6 +195,39 @@ class PaymentsController {
       .returning();
     if (!payment) throw new NotFoundException("Payment not found");
     return payment;
+  }
+
+  /**
+   * Mark a single PENDING installment as settled outside the portal
+   * (historical). No collection is recorded, so it stays out of all revenue /
+   * overdue reporting. Refuses if money was already collected against it.
+   */
+  @Post(":paymentId/settle-external")
+  @RequirePermissions(PERMISSIONS.PAYMENTS_WRITE)
+  async settleExternal(@CurrentUser() user: AuthUser, @Param("paymentId") paymentId: string) {
+    const id = parseInt(paymentId, 10);
+    const [p] = await this.db.select().from(paymentsTable)
+      .where(and(eq(paymentsTable.id, id), eq(paymentsTable.userId, scopeId(user)), isNull(paymentsTable.deletedAt)));
+    if (!p) throw new NotFoundException("Payment not found");
+    if (p.status === "paid" || p.status === "partially_paid") throw new BadRequestException("لا يمكن — تم تحصيل دفعات على هذا القسط");
+    const [row] = await this.db.update(paymentsTable)
+      .set({ status: "settled_external", paidDate: p.dueDate } as any)
+      .where(eq(paymentsTable.id, id)).returning();
+    return row;
+  }
+
+  /** Revert a settled_external installment back to a live pending due. */
+  @Post(":paymentId/revert-external")
+  @RequirePermissions(PERMISSIONS.PAYMENTS_WRITE)
+  async revertExternal(@CurrentUser() user: AuthUser, @Param("paymentId") paymentId: string) {
+    const id = parseInt(paymentId, 10);
+    const [row] = await this.db.update(paymentsTable)
+      .set({ status: "pending", paidDate: null } as any)
+      .where(and(eq(paymentsTable.id, id), eq(paymentsTable.userId, scopeId(user)),
+        eq(paymentsTable.status, "settled_external"), isNull(paymentsTable.deletedAt)))
+      .returning();
+    if (!row) throw new NotFoundException("Settled-external installment not found");
+    return row;
   }
 
   /** Collection history for one installment. */

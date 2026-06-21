@@ -223,7 +223,8 @@ class ReportsController {
     const overdueMap = new Map<string, { tenantId: number | null; tenant: string; amount: number; days: number }>();
     for (const p of payments) {
       if (p.description === DEPOSIT_DESC) continue;
-      if (p.status === "paid" || p.status === "cancelled") continue;
+      // settled_external = collected outside the portal (historical) — never overdue.
+      if (p.status === "paid" || p.status === "cancelled" || p.status === "settled_external") continue;
       const due = new Date(p.dueDate).getTime();
       if (!(due < todayMs)) continue; // only past due
       const collected = collections.filter((c) => c.paymentId === p.id).reduce((s, c) => s + Number(c.amount), 0);

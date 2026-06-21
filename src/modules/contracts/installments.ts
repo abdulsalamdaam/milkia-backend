@@ -9,7 +9,17 @@ export type FeeEntry = {
 export type RentTerm = { year: number; amount: number };
 /** One hand-built rent installment for a custom payment schedule. */
 export type CustomScheduleEntry = { dueDate: string; amount: number | string };
-export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending"; description: string | null; vatEnabled: boolean; isDemo: boolean };
+export type InstallmentRow = { contractId: number; userId: number; amount: string; dueDate: string; status: "pending" | "settled_external"; paidDate?: string | null; description: string | null; vatEnabled: boolean; isDemo: boolean };
+
+/**
+ * Mark installments whose due date precedes `settledUntil` as `settled_external`
+ * (rent collected outside the portal before onboarding). Stamps paidDate = due
+ * date. No collection rows are created, so these never enter revenue/overdue.
+ */
+export function applyExternalSettlement(rows: InstallmentRow[], settledUntil?: string | null): InstallmentRow[] {
+  if (!settledUntil) return rows;
+  return rows.map((r) => (r.dueDate < settledUntil ? { ...r, status: "settled_external" as const, paidDate: r.dueDate } : r));
+}
 
 export const VAT_RATE = 0.15;
 /** Round to 2 decimals without binary-float drift (e.g. 0.1 + 0.2). */

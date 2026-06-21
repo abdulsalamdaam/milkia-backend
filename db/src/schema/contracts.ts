@@ -89,6 +89,10 @@ export const contractsTable = pgTable("contracts", {
   isDemo: boolean("is_demo").notNull().default(false),
   // Optional supporting document (signed contract / offer) — MinIO object key.
   attachmentKey: text("attachment_key"),
+  // Existing/legacy contract: rent due BEFORE this date was already collected
+  // outside the portal. Those installments are generated as `settled_external`
+  // (history only, excluded from all financial reporting).
+  settledExternalUntil: date("settled_external_until"),
   notes: text("notes"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

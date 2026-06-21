@@ -4,7 +4,12 @@ import { z } from "zod/v4";
 import { contractsTable } from "./contracts";
 import { usersTable } from "./users";
 
-export const paymentStatusEnum = pgEnum("payment_status", ["paid", "pending", "overdue", "cancelled", "partially_paid"]);
+// `settled_external` = an installment for an EXISTING contract whose rent was
+// already collected OUTSIDE the portal before onboarding (historical opening
+// balance). It is NOT real portal revenue: it has no collection rows and is
+// excluded from every reporting/overdue/collection metric. It exists only to
+// keep the contract's full schedule/history intact.
+export const paymentStatusEnum = pgEnum("payment_status", ["paid", "pending", "overdue", "cancelled", "partially_paid", "settled_external"]);
 
 export const paymentsTable = pgTable("payments", {
   id: serial("id").primaryKey(),

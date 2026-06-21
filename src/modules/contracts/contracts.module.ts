@@ -21,7 +21,7 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
-import { buildInstallments, type FeeEntry } from "./installments";
+import { buildInstallments, applyExternalSettlement, type FeeEntry } from "./installments";
 import { attachLookupLabels } from "../../common/lookups-resolve";
 
 const CONTRACT_FIELDS = [
@@ -36,7 +36,7 @@ const CONTRACT_FIELDS = [
   "agencyFee", "firstPaymentAmount", "additionalFees", "customSchedule",
   "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
-  "status", "notes", "isDraft", "attachmentKey",
+  "status", "notes", "isDraft", "attachmentKey", "settledExternalUntil",
 ] as const;
 
 @ApiTags("contracts")
@@ -215,6 +215,7 @@ class ContractsController {
         status: contractsTable.status,
         notes: contractsTable.notes,
         attachmentKey: contractsTable.attachmentKey,
+        settledExternalUntil: contractsTable.settledExternalUntil,
         isDraft: contractsTable.isDraft,
         createdAt: contractsTable.createdAt,
       })
@@ -262,6 +263,11 @@ class ContractsController {
 
     const freq = body.paymentFrequency || "monthly";
     const ownerId = scopeId(user);
+    // Existing/legacy contract: rent due before this date was settled outside
+    // the portal. Normalised to YYYY-MM-DD or null.
+    const settledExternalUntil: string | null = body.settledExternalUntil
+      ? String(body.settledExternalUntil).slice(0, 10)
+      : null;
     // Per-account sequential contract number (EQ-000001, EQ-000002 …). Each
     // account has its own counter (unique is composite on user_id + number).
     const [cCount] = await this.db.select({ c: count() }).from(contractsTable)
@@ -327,6 +333,7 @@ class ContractsController {
       landlordBuildingNumber: body.landlordBuildingNumber ?? null,
       status: body.isDraft ? "pending" : "active",
       attachmentKey: body.attachmentKey ?? null,
+      settledExternalUntil: settledExternalUntil,
       notes: body.notes ?? null,
       isDraft: Boolean(body.isDraft ?? false),
       isDemo: false,
@@ -356,11 +363,14 @@ class ContractsController {
     // Build installments at their FULL amount (prepaid is NOT deducted — it's
     // recorded as a collection below so each installment shows its full value
     // with the remaining).
-    const rows = buildInstallments(
-      contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
-      Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
-      body.escalationType === "amount" ? "amount" : "percent",
-      rentTerms, 0, customSchedule,
+    const rows = applyExternalSettlement(
+      buildInstallments(
+        contract!.id, ownerId, startDate, endDate, String(monthlyRent), freq, additionalFees,
+        Boolean(body.vatEnabled ?? false), Number(body.escalationRate) || 0,
+        body.escalationType === "amount" ? "amount" : "percent",
+        rentTerms, 0, customSchedule,
+      ),
+      settledExternalUntil,
     );
     const inserted = rows.length > 0 ? await this.db.insert(paymentsTable).values(rows).returning() : [];
 
@@ -378,7 +388,7 @@ class ContractsController {
     if (prepaid > 0 && inserted.length > 0) {
       const method = body.prepaidMethod || "bank_transfer";
       const advanceVoucher = await this.nextReceiptNumber(ownerId);
-      const rentRows = inserted.filter((p) => !p.description)
+      const rentRows = inserted.filter((p) => !p.description && p.status !== "settled_external")
         .sort((a, b) => String(a.dueDate).localeCompare(String(b.dueDate)));
       let left = prepaid;
       let applied = 0;
@@ -542,12 +552,14 @@ class ContractsController {
       return { success: false, skipped: true, reason: "has_collected_payments", installmentsCreated: 0 };
     }
 
-    // Soft-delete pending installments before regenerating.
+    // Soft-delete the AUTO-generated installments (pending + settled_external)
+    // before regenerating — both are rebuilt from the contract terms, so this
+    // avoids duplicate periods. Collected rows (paid/partial) already blocked above.
     await this.db.update(paymentsTable).set({ deletedAt: new Date() } as any).where(
       and(
         eq(paymentsTable.contractId, id),
         eq(paymentsTable.userId, ownerId),
-        eq(paymentsTable.status, "pending"),
+        inArray(paymentsTable.status, ["pending", "settled_external"] as any),
         isNull(paymentsTable.deletedAt),
       )
     );
@@ -556,15 +568,18 @@ class ContractsController {
     const termRows = await this.db.select().from(contractRentTermsTable)
       .where(eq(contractRentTermsTable.contractId, id));
     const rentTerms = termRows.map((t) => ({ year: t.year, amount: Number(t.amount) }));
-    const rows = buildInstallments(
-      contract.id, ownerId,
-      contract.startDate, contract.endDate,
-      contract.monthlyRent, freq,
-      (contract.additionalFees as FeeEntry[] | null) ?? null,
-      Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
-      (contract as any).escalationType || "percent",
-      rentTerms, 0, // prepaid is tracked as a collection, not a deduction
-      ((contract as any).customSchedule as { dueDate: string; amount: string }[] | null) ?? null,
+    const rows = applyExternalSettlement(
+      buildInstallments(
+        contract.id, ownerId,
+        contract.startDate, contract.endDate,
+        contract.monthlyRent, freq,
+        (contract.additionalFees as FeeEntry[] | null) ?? null,
+        Boolean(contract.vatEnabled), Number(contract.escalationRate) || 0,
+        (contract as any).escalationType || "percent",
+        rentTerms, 0, // prepaid is tracked as a collection, not a deduction
+        ((contract as any).customSchedule as { dueDate: string; amount: string }[] | null) ?? null,
+      ),
+      (contract as any).settledExternalUntil ?? null,
     );
     if (rows.length > 0) await this.db.insert(paymentsTable).values(rows);
     return { success: true, installmentsCreated: rows.length };
