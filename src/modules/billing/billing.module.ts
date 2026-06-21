@@ -7,7 +7,9 @@ import { and, eq, ne, isNull, or, ilike, count, asc, desc, sum, inArray, getTabl
 import {
   simpleInvoicesTable, paymentsTable, paymentCollectionsTable, contractsTable,
   contractUnitsTable, unitsTable, propertiesTable, companiesTable, usersTable,
+  type BuyerSnapshot,
 } from "@oqudk/database";
+import type { InvoiceLineInput } from "../invoice/services/invoice-builder.service";
 import { listQuerySchema } from "../../common/pagination";
 import { nextReceiptVoucherNumber } from "../../common/receipt-number";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
@@ -17,6 +19,10 @@ import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
 import { scopeId } from "../../common/scope";
+import { Logger } from "@nestjs/common";
+import { InvoiceModule } from "../invoice/invoice.module";
+import { InvoiceService, type CreateInvoiceDto } from "../invoice/services/invoice.service";
+import { ZatcaOnboardingService } from "../invoice/services/zatca-onboarding.service";
 
 const DOC_TYPES = ["invoice", "credit", "debit"] as const;
 const DOC_STATUSES = ["draft", "confirmed", "cancelled"] as const;
@@ -45,7 +51,12 @@ function normalizeItems(raw: any): LineItem[] {
 @Controller("simple-invoices")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class SimpleInvoicesController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  private readonly logger = new Logger("BillingZatca");
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly invoices: InvoiceService,
+    private readonly zatcaOnboarding: ZatcaOnboardingService,
+  ) {}
 
   /**
    * Next document number for a type, e.g. INV-000123 / CRN-000005 / DBN-000002.
@@ -576,6 +587,8 @@ class SimpleInvoicesController {
       const [updated] = await this.db.update(simpleInvoicesTable).set({
         status: "confirmed", confirmedAt: new Date(),
       }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
+      // Mirror the note to ZATCA under the landlord's seller (best-effort).
+      await this.submitApprovedDocToZatca(uid, updated);
       return updated;
     }
 
@@ -583,6 +596,11 @@ class SimpleInvoicesController {
     const [updated] = await this.db.update(simpleInvoicesTable).set({
       status: "confirmed", confirmedAt: new Date(),
     }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
+
+    // When the landlord (the seller) is linked to ZATCA, mirror this invoice to
+    // ZATCA on approval — clearance for B2B, reporting for B2C. Best-effort:
+    // never blocks the approval (see submitApprovedDocToZatca).
+    await this.submitApprovedDocToZatca(uid, updated);
 
     // A rent invoice spawns its paired commission invoice (فاتورة عمولة) only
     // once APPROVED — not at draft — so the commission surfaces alongside an
@@ -594,6 +612,115 @@ class SimpleInvoicesController {
       catch { /* ignore — rent invoice already approved */ }
     }
     return { ...updated, commission };
+  }
+
+  /**
+   * Best-effort: mirror an approved billing document to ZATCA under the
+   * property's landlord (the per-landlord seller), IF that landlord is onboarded
+   * for the active environment. NEVER throws — a ZATCA failure (not onboarded,
+   * duplicate number, validation, outage) must not block the approval. The
+   * landlord's seller gets a real signed, submitted invoice on their side.
+   */
+  private async submitApprovedDocToZatca(uid: number, doc: any): Promise<void> {
+    try {
+      // Resolve the landlord (owner) that is the ZATCA seller. A commission
+      // invoice is issued BY the managing account (seller = account-level).
+      const ownerId = doc.kind === "commission" ? null : await this.resolveOwnerId(uid, doc.contractId);
+
+      // Only proceed if that seller is configured AND onboarded for its active env.
+      const creds = await this.zatcaOnboarding.getCredentials(uid, ownerId);
+      if (!creds) { this.logger.debug(`ZATCA: ${doc.number} skipped — seller not configured (ownerId=${ownerId})`); return; }
+      const env = creds.activeEnvironment;
+      const onboarded = env === "sandbox" ? !!creds.sandboxCertPem : !!creds.prodCertPem;
+      if (!onboarded) { this.logger.debug(`ZATCA: ${doc.number} skipped — landlord not onboarded for ${env}`); return; }
+
+      const contract = doc.contractId
+        ? (await this.db.select().from(contractsTable)
+            .where(and(eq(contractsTable.id, Number(doc.contractId)), eq(contractsTable.userId, uid))))[0] ?? null
+        : null;
+
+      const lines = this.zatcaLinesFromDoc(doc);
+      if (!lines.length) { this.logger.debug(`ZATCA: ${doc.number} skipped — no line items`); return; }
+      const buyer = this.buyerSnapshotFromDoc(doc, contract);
+      // B2B (buyer has a VAT number) → standard/clearance; otherwise simplified/reporting.
+      const profile: "standard" | "simplified" = buyer?.vat ? "standard" : "simplified";
+
+      const dto: CreateInvoiceDto = {
+        invoiceNumber: doc.number,
+        ownerId,
+        profile,
+        docType: (doc.type as "invoice" | "credit" | "debit") ?? "invoice",
+        language: "ar",
+        currency: "SAR",
+        contractId: doc.contractId ?? null,
+        buyer,
+        lines,
+        billingReferenceId: doc.type !== "invoice" ? (doc.billingReference ?? null) : null,
+        instructionNote: doc.type !== "invoice" ? (doc.notes ?? undefined) : undefined,
+        notes: doc.notes ?? null,
+      };
+      const result = await this.invoices.issue(uid, dto);
+      this.logger.log(`ZATCA: ${doc.number} → ${result.invoice.status} (${result.invoice.submittedTo}, ${profile}) ownerId=${ownerId}`);
+    } catch (e: any) {
+      this.logger.warn(`ZATCA submit failed for ${doc?.number}: ${e?.message ?? e}`);
+    }
+  }
+
+  /** Landlord (owner) for a contract: contract → unit → property → owner. */
+  private async resolveOwnerId(uid: number, contractId: number | null): Promise<number | null> {
+    if (!contractId) return null;
+    const [row] = await this.db
+      .select({ ownerId: propertiesTable.ownerId })
+      .from(contractUnitsTable)
+      .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+      .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+      .where(eq(contractUnitsTable.contractId, Number(contractId)))
+      .limit(1);
+    void uid;
+    return row?.ownerId ?? null;
+  }
+
+  /** ZATCA invoice lines from a billing doc's items (15% S, or out-of-scope). */
+  private zatcaLinesFromDoc(doc: any): InvoiceLineInput[] {
+    return normalizeItems(doc.items).map((it, i) => {
+      const quantity = it.quantity || 1;
+      const unitPrice = it.unitPrice || (quantity ? round2(it.amount / quantity) : it.amount);
+      return {
+        id: String(i + 1),
+        name: it.description || "بند",
+        quantity,
+        unitPrice,
+        vatPercent: it.vat ? 15 : 0,
+        vatCategory: it.vat ? "S" : "O",
+      } as InvoiceLineInput;
+    });
+  }
+
+  /** Buyer for the ZATCA invoice: tenant for rent, landlord for commission. */
+  private buyerSnapshotFromDoc(doc: any, contract: any | null): BuyerSnapshot {
+    const c = doc.client || {};
+    if (doc.kind === "commission") {
+      return {
+        name: doc.tenantName || contract?.landlordName || "المؤجر",
+        vat: c.vatNumber || contract?.landlordTaxNumber || null,
+        street: contract?.landlordAddress || c.address || null,
+        buildingNo: contract?.landlordBuildingNumber || null,
+        district: null,
+        city: null,
+        postalZone: contract?.landlordPostalCode || null,
+        additionalNo: contract?.landlordAdditionalNumber || null,
+      };
+    }
+    return {
+      name: doc.tenantName || contract?.tenantName || c.name || "العميل",
+      vat: c.vatNumber || contract?.tenantTaxNumber || null,
+      street: contract?.tenantAddress || c.address || null,
+      buildingNo: contract?.tenantBuildingNumber || null,
+      district: null,
+      city: null,
+      postalZone: contract?.tenantPostalCode || null,
+      additionalNo: contract?.tenantAdditionalNumber || null,
+    };
   }
 
   /**
@@ -704,5 +831,5 @@ class SimpleInvoicesController {
   }
 }
 
-@Module({ controllers: [SimpleInvoicesController] })
+@Module({ imports: [InvoiceModule], controllers: [SimpleInvoicesController] })
 export class BillingModule {}

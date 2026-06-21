@@ -259,18 +259,28 @@ export class InvoiceBuilderService {
       })
       .join("\n  ");
 
+    // Non-standard categories (E/Z/O) MUST carry a tax-exemption reason or ZATCA
+    // rejects the document. Map each to its KSA reason code.
+    const EXEMPTION: Record<string, { code: string; text: string }> = {
+      E: { code: "VATEX-SA-29", text: "Financial services mentioned in Article 29 of the VAT Regulations" },
+      Z: { code: "VATEX-SA-32", text: "Export of goods" },
+      O: { code: "VATEX-SA-OOS", text: "Not subject to VAT" },
+    };
     const taxSubtotalsXml = totals.subtotals
-      .map(
-        (s) => `<cac:TaxSubtotal>
+      .map((s) => {
+        const ex = s.category !== "S" ? EXEMPTION[s.category] : null;
+        return `<cac:TaxSubtotal>
       <cbc:TaxableAmount currencyID="${currency}">${money(s.taxable)}</cbc:TaxableAmount>
       <cbc:TaxAmount currencyID="${currency}">${money(s.tax)}</cbc:TaxAmount>
       <cac:TaxCategory>
         <cbc:ID>${s.category}</cbc:ID>
-        <cbc:Percent>${money(s.percent)}</cbc:Percent>
+        <cbc:Percent>${money(s.percent)}</cbc:Percent>${ex ? `
+        <cbc:TaxExemptionReasonCode>${ex.code}</cbc:TaxExemptionReasonCode>
+        <cbc:TaxExemptionReason>${escapeXml(ex.text)}</cbc:TaxExemptionReason>` : ""}
         <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
       </cac:TaxCategory>
-    </cac:TaxSubtotal>`,
-      )
+    </cac:TaxSubtotal>`;
+      })
       .join("\n    ");
 
     const xml = `<?xml version="1.0" encoding="UTF-8"?>
