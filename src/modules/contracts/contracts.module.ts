@@ -214,6 +214,7 @@ class ContractsController {
         landlordBuildingNumber: contractsTable.landlordBuildingNumber,
         status: contractsTable.status,
         notes: contractsTable.notes,
+        attachmentKey: contractsTable.attachmentKey,
         isDraft: contractsTable.isDraft,
         createdAt: contractsTable.createdAt,
       })
