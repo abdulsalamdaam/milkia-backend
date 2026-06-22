@@ -580,77 +580,13 @@ class SimpleInvoicesController {
 
     const isNote = doc.type === "credit" || doc.type === "debit";
     if (isNote) {
-      const sign = doc.type === "credit" ? -1 : 1;
-      if (doc.billingReference) {
-        const [refInv] = await this.db.select().from(simpleInvoicesTable)
-          .where(and(eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "invoice"),
-            eq(simpleInvoicesTable.number, doc.billingReference), isNull(simpleInvoicesTable.deletedAt)));
-        if (refInv) {
-          // ZATCA + accounting best practice: a tax invoice is an IMMUTABLE
-          // legal document. Once issued (and reported/cleared), its subtotal and
-          // total are frozen forever — we must NOT rewrite them. The credit/debit
-          // note is a separate legal document (submitted to ZATCA on its own)
-          // that references the original via billingReference. The value is
-          // reflected in the COLLECTIBLE, not in the invoice's frozen figures:
-          //   net obligation = invoice total + Σ(signed confirmed notes)
-          // We adjust the internal installment schedule (not a legal document)
-          // and sync the invoice's paid flag — but never its money fields.
-          const noteTotal = sign * Number(doc.total);
-
-          // 1) Internal installment schedule reflects the new amount to collect.
-          if (refInv.paymentId) {
-            const [payment] = await this.db.select().from(paymentsTable)
-              .where(and(eq(paymentsTable.id, refInv.paymentId), eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
-            if (payment && payment.status !== "cancelled") {
-              const newAmount = Math.max(0, round2(Number(payment.amount) + noteTotal));
-              const prior = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
-                .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, payment.id));
-              const collected = round2(Number(prior[0]?.total ?? 0));
-              const status = collected >= newAmount - 0.01 ? "paid" : collected > 0.01 ? "partially_paid" : "pending";
-              await this.db.update(paymentsTable).set({
-                amount: newAmount.toFixed(2),
-                status,
-                paidDate: status === "pending" ? null : payment.paidDate,
-              }).where(eq(paymentsTable.id, payment.id));
-            }
-          }
-
-          // 2) Net obligation from the immutable invoice + ALL confirmed notes
-          //    (including this one), to sync the invoice's paid flag only.
-          const [noteAgg] = await this.db
-            .select({ total: sum(simpleInvoicesTable.total) })
-            .from(simpleInvoicesTable)
-            .where(and(
-              eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "credit"),
-              eq(simpleInvoicesTable.billingReference, refInv.number),
-              eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt),
-            ));
-          const [debitAgg] = await this.db
-            .select({ total: sum(simpleInvoicesTable.total) })
-            .from(simpleInvoicesTable)
-            .where(and(
-              eq(simpleInvoicesTable.userId, uid), eq(simpleInvoicesTable.type, "debit"),
-              eq(simpleInvoicesTable.billingReference, refInv.number),
-              eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt),
-            ));
-          // This note isn't confirmed yet at this point — fold its value in.
-          const confirmedNotes = round2(-Number(noteAgg?.total ?? 0) + Number(debitAgg?.total ?? 0) + noteTotal);
-          const netDue = Math.max(0, round2(Number(refInv.total) + confirmedNotes));
-          const [refColl] = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
-            .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.invoiceId, refInv.id));
-          const refCollected = round2(Number(refColl?.total ?? 0));
-          const fullyPaid = netDue > 0 && refCollected >= netDue - 0.01;
-          await this.db.update(simpleInvoicesTable).set({
-            // money fields untouched — only the paid flag + audit trail.
-            paidDate: fullyPaid ? (refInv.paidDate ?? today()) : null,
-            notes: `${refInv.notes ? refInv.notes + " · " : ""}${doc.type === "credit" ? "إشعار دائن" : "إشعار مدين"} ${doc.number}`,
-          }).where(eq(simpleInvoicesTable.id, refInv.id));
-        }
-      }
-      // A note keeps its own document number (CRN-/DBN-). It is NOT a receipt
-      // voucher, so it must never get a receiptNumber — that column is only for
-      // collected money / RV vouchers, and a CN-/DN- there leaks into the
-      // Receipt column as if the note were a collection.
+      // A credit/debit note is a STANDALONE legal document. The original invoice
+      // is immutable and is NOT touched at all (no figures, no paid flag, no
+      // installment, no audit text) — approving the note simply confirms it and
+      // mirrors it to ZATCA. Its financial effect is computed purely in the
+      // Reports tab, which nets confirmed notes against the invoice
+      // (invoiced = Σ invoices − Σ credit + Σ debit). The note keeps its own
+      // CRN-/DBN- number and references the original via billingReference.
       const [updated] = await this.db.update(simpleInvoicesTable).set({
         status: "confirmed", confirmedAt: new Date(),
       }).where(and(eq(simpleInvoicesTable.id, doc.id), eq(simpleInvoicesTable.userId, uid))).returning();
