@@ -399,7 +399,7 @@ class ContractsController {
         await this.db.insert(paymentCollectionsTable).values({
           paymentId: p.id, userId: ownerId, amount: amt.toFixed(2),
           collectedDate: startDay, method, receiptNumber: advanceVoucher,
-          notes: "إيجار مدفوع مقدماً",
+          notes: "إيجار مدفوع مقدماً", attachmentKey: body.prepaidAttachmentKey ?? null,
         } as any);
         const fully = amt >= full - 0.01;
         await this.db.update(paymentsTable)
@@ -421,6 +421,7 @@ class ContractsController {
           subtotal: applied.toFixed(2), total: applied.toFixed(2),
           issueDate: startDay, paidDate: startDay, confirmedAt: new Date(),
           receiptNumber: advanceVoucher, paymentMethod: method, notes: "إيجار مدفوع مقدماً",
+          attachmentKey: body.prepaidAttachmentKey ?? null,
         } as any);
       }
     }
@@ -433,6 +434,7 @@ class ContractsController {
     if (depositAmt > 0 && body.depositStatus === "collected") {
       await this.createDepositVoucher(
         ownerId, contract!, depositAmt, body.depositDueDate || startDay, body.depositMethod || "bank_transfer",
+        body.depositAttachmentKey ?? null,
       );
     }
 
@@ -450,7 +452,7 @@ class ContractsController {
    * no VAT, stamped with an RV number. This is the ONLY artefact a collected
    * deposit produces — there is no installment/payment row for it.
    */
-  private async createDepositVoucher(ownerId: number, contract: any, amount: number, date: string, method: string) {
+  private async createDepositVoucher(ownerId: number, contract: any, amount: number, date: string, method: string, attachmentKey?: string | null) {
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const amt = round2(amount);
     const voucher = await this.nextReceiptNumber(ownerId);
@@ -464,6 +466,7 @@ class ContractsController {
       subtotal: amt.toFixed(2), total: amt.toFixed(2),
       issueDate: date, paidDate: date, confirmedAt: new Date(),
       receiptNumber: voucher, paymentMethod: method, notes: DEPOSIT_DESC,
+      attachmentKey: attachmentKey ?? null,
     } as any).returning();
     return doc;
   }
@@ -488,12 +491,19 @@ class ContractsController {
       .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.contractId, id),
         eq(simpleInvoicesTable.kind, "deposit"), isNull(simpleInvoicesTable.deletedAt)))
       .orderBy(desc(simpleInvoicesTable.id)).limit(1);
+    // The advance/prepaid-rent receipt voucher (سند قبض), if any — so the contract
+    // detail can show its proof alongside the deposit.
+    const [prepaidVoucher] = await this.db.select().from(simpleInvoicesTable)
+      .where(and(eq(simpleInvoicesTable.userId, ownerId), eq(simpleInvoicesTable.contractId, id),
+        eq(simpleInvoicesTable.kind, "receipt"), isNull(simpleInvoicesTable.deletedAt)))
+      .orderBy(desc(simpleInvoicesTable.id)).limit(1);
     return {
       amount: round2(Number(contract.depositAmount) || 0),
       status: contract.depositStatus ?? null,
       method: contract.depositMethod ?? null,
       dueDate: contract.depositDueDate ?? null,
       voucher: voucher ?? null,
+      prepaidVoucher: prepaidVoucher ?? null,
     };
   }
 
