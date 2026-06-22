@@ -478,7 +478,6 @@ export function renderInvoiceHtml(ctx: RenderContext): string {
       return `<tr>
         <td>${i + 1}</td>
         <td>${escapeHtml(lineName)}</td>
-        <td class="num">${fmt(l.quantity)}</td>
         <td class="num">${fmt(l.unitPrice)}</td>
         <td class="num">${fmt(l.lineNet)}</td>
         <td class="num">${fmt(l.vatPercent)}%</td>
@@ -615,7 +614,7 @@ export function renderInvoiceHtml(ctx: RenderContext): string {
     <thead>
       <tr>
         <th>#</th><th>${t.description}</th>
-        <th class="num">${t.qty}</th><th class="num">${t.unit}</th>
+        <th class="num">${t.unit}</th>
         <th class="num">${t.net}</th><th class="num">${t.vatPct}</th><th class="num">${t.vatAmt}</th><th class="num">${t.total}</th>
       </tr>
     </thead>
