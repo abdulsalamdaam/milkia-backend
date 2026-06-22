@@ -187,15 +187,17 @@ class ReportsController {
       if (!r) { r = { key, tenantId: id, tenant: name, invoiced: 0, collected: 0, deposit: 0, balance: 0 }; tmap.set(key, r); }
       return r;
     };
-    // Invoiced = APPROVED tenant rent invoices only. Drafts never enter the
-    // statement, and credit/debit notes are skipped here because an approved
-    // note already adjusted its parent invoice's total — counting the parent
-    // alone reflects the net (no double counting).
+    // Invoiced = APPROVED tenant documents, NET of credit/debit notes
+    // (Approach 2): the original invoice is immutable, so the note's full value
+    // (net + VAT) is subtracted (credit) / added (debit) here. e.g. a 1,150
+    // invoice with a 230 credit note → 920 invoiced. Drafts never count.
     for (const inv of invoices) {
-      if (inv.kind === "commission" || inv.kind === "deposit" || inv.kind === "receipt" || inv.type !== "invoice" || inv.status !== "confirmed") continue;
+      if (inv.kind === "commission" || inv.kind === "deposit" || inv.kind === "receipt" || inv.status !== "confirmed") continue;
+      if (inv.type !== "invoice" && inv.type !== "credit" && inv.type !== "debit") continue;
       const name = inv.tenantName || (inv.tenantId != null ? tenantById.get(inv.tenantId)?.name : null) || "—";
       const r = ensureT(inv.tenantId ?? null, name);
-      r.invoiced = round2(r.invoiced + Number(inv.total));
+      const sign = inv.type === "credit" ? -1 : 1; // debit & invoice add, credit subtracts
+      r.invoiced = round2(r.invoiced + sign * Number(inv.total));
     }
     // Collected per tenant (via their contracts), excluding deposit.
     for (const c of contracts) {
