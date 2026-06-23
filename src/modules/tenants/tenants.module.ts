@@ -8,6 +8,7 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
+import { assertNationalAddress } from "../../common/national-address";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { EmailService } from "../email/email.service";
@@ -70,6 +71,7 @@ class TenantsController {
   @RequirePermissions(PERMISSIONS.TENANTS_WRITE)
   async create(@CurrentUser() user: AuthUser, @Body() body: any) {
     if (!body.name) throw new BadRequestException("الاسم مطلوب");
+    assertNationalAddress(body);
     const [tenant] = await this.db.insert(tenantsTable).values({
       userId: scopeId(user),
       name: body.name,

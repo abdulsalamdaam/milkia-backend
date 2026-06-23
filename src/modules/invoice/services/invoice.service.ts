@@ -93,6 +93,14 @@ export class InvoiceService {
 
     const sellerSnapshot: SellerSnapshot = this.sellerSnapshotFrom(creds);
 
+    // ZATCA BR-KSA-63: a standard tax invoice must carry a COMPLETE national
+    // postal address for both seller and buyer. We never silently drop address
+    // fields — the full address (street, building no., district, city, postal
+    // code) is mandatory and validated up front. Simplified (B2C) invoices have
+    // no identified buyer, so only the seller address is required there.
+    this.assertAddressComplete(sellerSnapshot, "Seller");
+    if (dto.profile === "standard") this.assertAddressComplete(dto.buyer, "Buyer");
+
     const built = this.builder.build({
       profile: dto.profile,
       docType: dto.docType ?? "invoice",
@@ -310,6 +318,25 @@ export class InvoiceService {
       street: creds.sellerStreet, buildingNo: creds.sellerBuildingNo, district: creds.sellerDistrict,
       city: creds.sellerCity, postalZone: creds.sellerPostalZone, additionalNo: creds.sellerAdditionalNo,
     };
+  }
+
+  /**
+   * Reject an incomplete national address before it ever reaches ZATCA. The
+   * four-line Saudi address — street, building number, district, city and
+   * postal code — is mandatory; only the additional number is optional.
+   */
+  private assertAddressComplete(
+    a: { street?: string | null; buildingNo?: string | null; district?: string | null; city?: string | null; postalZone?: string | null } | null | undefined,
+    who: "Seller" | "Buyer",
+  ): void {
+    const required = { street: "street", buildingNo: "building number", district: "district", city: "city", postalZone: "postal code" } as const;
+    const missing = (Object.keys(required) as (keyof typeof required)[]).filter((k) => !a?.[k] || !String(a[k]).trim());
+    if (!a || missing.length) {
+      const labels = missing.map((k) => required[k]).join(", ");
+      throw new BadRequestException(
+        `${who} national address is incomplete for ZATCA — missing: ${labels}. A complete address (street, building number, district, city, postal code) is required for a standard tax invoice.`,
+      );
+    }
   }
 
   /** Build → sign → submit ONE document to ZATCA's compliance endpoint. */

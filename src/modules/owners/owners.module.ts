@@ -8,6 +8,7 @@ import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { PermissionsGuard, RequirePermissions } from "../../common/permissions.decorator";
 import { PERMISSIONS } from "../../common/permissions";
+import { assertNationalAddress } from "../../common/national-address";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
@@ -75,6 +76,7 @@ class OwnersController {
   @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
   async create(@CurrentUser() user: AuthUser, @Body() body: any) {
     if (!body.name) throw new BadRequestException("الاسم مطلوب");
+    assertNationalAddress(body);
     // Enforce the subscription package's landlord quota.
     await assertWithinQuota(this.db, scopeId(user), "landlords");
     const wantsDefault = Boolean(body.isDefault ?? false);

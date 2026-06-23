@@ -27,12 +27,30 @@ class PackageController {
         packagePlan: usersTable.packagePlan, userType: usersTable.userType, onboardedAt: usersTable.onboardedAt,
         subscriptionStartedAt: usersTable.subscriptionStartedAt, subscriptionEndsAt: usersTable.subscriptionEndsAt,
         subscriptionStatus: usersTable.subscriptionStatus, billingCycle: usersTable.billingCycle,
-        setupCompletedAt: usersTable.setupCompletedAt,
+        setupCompletedAt: usersTable.setupCompletedAt, companyId: usersTable.companyId,
       })
       .from(usersTable)
       .where(eq(usersTable.id, ownerId));
     const plan = resolvePackage(owner?.packagePlan);
     const usage = await packageUsage(this.db, ownerId);
+
+    // Settings completeness — drives the post-payment "complete your settings"
+    // lock. Complete when EITHER the account company OR the default landlord
+    // carries an identity + address (lenient on purpose, so a filled account is
+    // never falsely locked out). Tenant-mode accounts are never gated here.
+    const filled = (v: unknown) => v != null && String(v).trim() !== "";
+    let companyComplete = false;
+    if (owner?.companyId) {
+      const [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, owner.companyId));
+      companyComplete = !!co && filled(co.name) && filled(co.city) && filled(co.address);
+    }
+    const [defOwner] = await this.db.select().from(ownersTable)
+      .where(and(eq(ownersTable.userId, ownerId), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt)))
+      .limit(1);
+    const ownerComplete = !!defOwner && filled(defOwner.name) && filled(defOwner.buildingNumber)
+      && filled(defOwner.nationalAddressStreet) && filled(defOwner.nationalAddressDistrict)
+      && filled(defOwner.nationalAddressCity) && filled(defOwner.postalCode);
+    const settingsComplete = plan.mode === "tenant" ? true : (companyComplete || ownerComplete);
     const endsAt = owner?.subscriptionEndsAt ?? null;
     const daysRemaining = endsAt ? Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000) : null;
 
@@ -47,6 +65,8 @@ class PackageController {
       onboarded: owner?.onboardedAt != null,
       // First-run getting-started checklist completed (persisted, not local).
       setupCompleted: owner?.setupCompletedAt != null,
+      // Required-settings completeness — the dashboard locks to Settings until true.
+      settingsComplete,
       subscriptionStartedAt: owner?.subscriptionStartedAt ?? null,
       subscriptionEndsAt: endsAt,
       daysRemaining,

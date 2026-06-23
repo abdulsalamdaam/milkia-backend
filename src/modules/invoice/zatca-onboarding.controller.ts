@@ -121,8 +121,16 @@ export class ZatcaOnboardingController {
   @Post("profile")
   @RequirePermissions(PERMISSIONS.ZATCA_ONBOARD)
   async upsertProfile(@CurrentUser() user: AuthUser, @Body() body: SellerProfileInput & { ownerId?: number }) {
-    if (!body?.sellerName || !body.sellerVatNumber || !body.sellerStreet) {
-      throw new BadRequestException("sellerName, sellerVatNumber, sellerStreet are required");
+    // ZATCA requires a COMPLETE seller national address — not just the street.
+    // Reject a partial address up front (additional number stays optional).
+    const required: Array<[keyof SellerProfileInput, string]> = [
+      ["sellerName", "name"], ["sellerVatNumber", "VAT number"], ["sellerStreet", "street"],
+      ["sellerBuildingNo", "building number"], ["sellerDistrict", "district"],
+      ["sellerCity", "city"], ["sellerPostalZone", "postal code"],
+    ];
+    const missing = required.filter(([k]) => !body?.[k] || !String(body[k]).trim()).map(([, label]) => label);
+    if (missing.length) {
+      throw new BadRequestException(`Required ZATCA seller fields missing: ${missing.join(", ")}.`);
     }
     return this.onboarding.upsertProfile(scopeId(user), body, this.oid(body.ownerId));
   }

@@ -1,0 +1,33 @@
+import { BadRequestException } from "@nestjs/common";
+
+/**
+ * Enforce the complete Saudi National Address on a FINALIZED tenant/landlord
+ * record (a draft may be incomplete). Every field is mandatory — building
+ * number, street, district, city, postal code and additional number — so the
+ * data is ZATCA-ready when the record is later billed.
+ *
+ * Tenant & landlord payloads store the structured address across
+ * `buildingNumber`, `nationalAddressStreet`, `nationalAddressDistrict`,
+ * `nationalAddressCity`, `postalCode`, `additionalNumber`. Records created
+ * outside the forms (bulk import, onboarding auto-seed) insert directly and
+ * never reach this controller path.
+ */
+export function assertNationalAddress(body: any): void {
+  if (body?.isDraft) return; // drafts may be incomplete
+  const required: Array<[string, string]> = [
+    ["buildingNumber", "رقم المبنى · building number"],
+    ["nationalAddressStreet", "الشارع · street"],
+    ["nationalAddressDistrict", "الحي · district"],
+    ["nationalAddressCity", "المدينة · city"],
+    ["postalCode", "الرمز البريدي · postal code"],
+    ["additionalNumber", "الرقم الإضافي · additional number"],
+  ];
+  const missing = required.filter(([k]) => body?.[k] == null || String(body[k]).trim() === "").map(([, label]) => label);
+  if (missing.length) {
+    throw new BadRequestException(`العنوان الوطني غير مكتمل · National address is incomplete — missing: ${missing.join(", ")}`);
+  }
+  // Postal code must be 5 digits when provided.
+  if (body.postalCode && !/^\d{5}$/.test(String(body.postalCode).trim())) {
+    throw new BadRequestException("الرمز البريدي يجب أن يكون 5 أرقام · Postal code must be 5 digits");
+  }
+}
