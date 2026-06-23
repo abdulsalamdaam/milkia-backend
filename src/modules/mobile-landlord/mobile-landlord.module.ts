@@ -231,6 +231,61 @@ class LandlordMobileController {
       .limit(200);
   }
 
+  /** One property's FULL detail + its units + active contracts. */
+  @Get("properties/:id")
+  async property(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const uid = scopeId(user);
+    const pid = parseInt(id, 10);
+    const [p] = await this.db.select().from(propertiesTable)
+      .where(and(eq(propertiesTable.id, pid), eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+    if (!p) throw new NotFoundException("Property not found");
+    const units = await this.db.select().from(unitsTable)
+      .where(and(eq(unitsTable.propertyId, pid), isNull(unitsTable.deletedAt))).orderBy(unitsTable.unitNumber);
+    const unitIds = units.map((u) => u.id);
+    const contracts = unitIds.length
+      ? await this.db.selectDistinct({
+          id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
+          tenantName: contractsTable.tenantName, monthlyRent: contractsTable.monthlyRent,
+          startDate: contractsTable.startDate, endDate: contractsTable.endDate,
+        })
+        .from(contractUnitsTable).innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+        .where(and(inArray(contractUnitsTable.unitId, unitIds), isNull(contractsTable.deletedAt)))
+      : [];
+    return {
+      ...p,
+      rentedUnits: units.filter((u) => u.status === "rented").length,
+      availableUnits: units.filter((u) => u.status === "available").length,
+      units: units.map((u) => ({ ...u, rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null })),
+      contracts: contracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })),
+    };
+  }
+
+  /** One unit's FULL detail + its current active contract/tenant. */
+  @Get("units/:id")
+  async unit(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const uid = scopeId(user);
+    const unitId = parseInt(id, 10);
+    const [row] = await this.db
+      .select({ unit: unitsTable, propertyName: propertiesTable.name, propertyId: propertiesTable.id })
+      .from(unitsTable).innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+      .where(and(eq(unitsTable.id, unitId), eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt)));
+    if (!row) throw new NotFoundException("Unit not found");
+    const [cu] = await this.db
+      .select({ id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
+        tenantName: contractsTable.tenantName, tenantPhone: contractsTable.tenantPhone,
+        monthlyRent: contractsTable.monthlyRent, startDate: contractsTable.startDate, endDate: contractsTable.endDate })
+      .from(contractUnitsTable).innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+      .where(and(eq(contractUnitsTable.unitId, unitId), eq(contractsTable.status, "active"), isNull(contractsTable.deletedAt)))
+      .limit(1);
+    const u = row.unit;
+    return {
+      ...u,
+      rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null,
+      property: row.propertyName, propertyId: row.propertyId,
+      currentContract: cu ? { ...cu, monthlyRent: this.num(cu.monthlyRent) } : null,
+    };
+  }
+
   /** One contract's full detail (read-only). */
   @Get("contracts/:id")
   async contract(@CurrentUser() user: AuthUser, @Param("id") id: string) {
