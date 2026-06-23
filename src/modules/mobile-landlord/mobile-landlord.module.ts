@@ -3,13 +3,14 @@ import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, inArray, desc } from "drizzle-orm";
 import {
   usersTable, ownersTable, propertiesTable, unitsTable, contractsTable, contractUnitsTable,
-  paymentsTable, paymentCollectionsTable, tenantsTable,
+  paymentsTable, paymentCollectionsTable, tenantsTable, deedsTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { scopeId } from "../../common/scope";
+import { UploadsService } from "../uploads/uploads.service";
 
 /**
  * Landlord mobile API — READ ONLY. Mirrors the tenant-portal shape but for a
@@ -22,9 +23,14 @@ import { scopeId } from "../../common/scope";
 @Controller("landlord/me")
 @UseGuards(JwtAuthGuard)
 class LandlordMobileController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Drizzle, private readonly uploads: UploadsService) {}
 
   private num(s: string | null | undefined) { return parseFloat(s || "0") || 0; }
+  /** Resolve a stored object key to a short-lived signed URL (or null). */
+  private async sign(key: string | null | undefined): Promise<string | null> {
+    if (!key) return null;
+    try { return await this.uploads.presignGet(key, 3600); } catch { return null; }
+  }
 
   /** Logged-in landlord profile + how many landlords/properties they hold. */
   @Get("profile")
@@ -251,8 +257,17 @@ class LandlordMobileController {
         .from(contractUnitsTable).innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
         .where(and(inArray(contractUnitsTable.unitId, unitIds), isNull(contractsTable.deletedAt)))
       : [];
+    // Title deed (صك) for the property, if linked.
+    let deed: any = null;
+    if (p.deedId) {
+      const [d] = await this.db.select().from(deedsTable)
+        .where(and(eq(deedsTable.id, p.deedId), isNull(deedsTable.deletedAt)));
+      if (d) deed = { ...d, documentUrl: await this.sign(d.documentUrl) };
+    }
     return {
       ...p,
+      imageUrl: await this.sign((p as any).imageKey),
+      deed,
       rentedUnits: units.filter((u) => u.status === "rented").length,
       availableUnits: units.filter((u) => u.status === "available").length,
       units: units.map((u) => ({ ...u, rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null })),
@@ -281,9 +296,27 @@ class LandlordMobileController {
     return {
       ...u,
       rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null,
+      imageUrl: await this.sign((u as any).imageKey), floorPlanUrl: await this.sign((u as any).floorPlanKey),
       property: row.propertyName, propertyId: row.propertyId,
       currentContract: cu ? { ...cu, monthlyRent: this.num(cu.monthlyRent) } : null,
     };
+  }
+
+  /** One tenant's full detail + their contracts (read-only). */
+  @Get("tenants/:id")
+  async tenant(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const uid = scopeId(user);
+    const tid = parseInt(id, 10);
+    const [t] = await this.db.select().from(tenantsTable)
+      .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)));
+    if (!t) throw new NotFoundException("Tenant not found");
+    const contracts = await this.db.select({
+      id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
+      monthlyRent: contractsTable.monthlyRent, startDate: contractsTable.startDate, endDate: contractsTable.endDate,
+    }).from(contractsTable)
+      .where(and(eq(contractsTable.userId, uid), eq(contractsTable.tenantId, tid), isNull(contractsTable.deletedAt)))
+      .orderBy(desc(contractsTable.createdAt));
+    return { ...t, contracts: contracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })) };
   }
 
   /** One contract's full detail (read-only). */

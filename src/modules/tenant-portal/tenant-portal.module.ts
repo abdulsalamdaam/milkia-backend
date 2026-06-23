@@ -2,12 +2,13 @@ import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Inject, M
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, IsString, MinLength } from "class-validator";
 import { Throttle } from "@nestjs/throttler";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, paymentsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { contractsTable, contractUnitsTable, paymentsTable, paymentCollectionsTable, simpleInvoicesTable, deedsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
 import { attachLookupLabels } from "../../common/lookups-resolve";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
+import { UploadsService } from "../uploads/uploads.service";
 
 class FcmTokenDto {
   @IsString()
@@ -42,7 +43,13 @@ class DeleteAccountDto {
 @Controller("tenant/me")
 @UseGuards(TenantAuthGuard)
 export class TenantPortalController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Drizzle, private readonly uploads: UploadsService) {}
+
+  private num(s: string | null | undefined) { return parseFloat(s || "0") || 0; }
+  private async sign(key: string | null | undefined): Promise<string | null> {
+    if (!key) return null;
+    try { return await this.uploads.presignGet(key, 3600); } catch { return null; }
+  }
 
   /* ── Profile ── */
   @Get()
@@ -103,7 +110,9 @@ export class TenantPortalController {
           propertyName: propertiesTable.name,
           propertyCityLookupId: propertiesTable.cityLookupId,
           propertyDistrict: propertiesTable.district,
+          propertyStreet: propertiesTable.street,
           propertyTypeLookupId: propertiesTable.typeLookupId,
+          propertyDeedId: propertiesTable.deedId,
         })
         .from(contractUnitsTable)
         .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
@@ -120,6 +129,14 @@ export class TenantPortalController {
         unitsByContract.set(u.contractId, list);
       }
     }
+    // Resolve the title deed (صك) for each contract's property, with a signed
+    // document URL — so the tenant can view the deed too.
+    const deedIds = [...new Set([...unitsByContract.values()].flat().map((u: any) => u.propertyDeedId).filter(Boolean))] as number[];
+    const deedMap = new Map<number, any>();
+    if (deedIds.length) {
+      const deeds = await this.db.select().from(deedsTable).where(inArray(deedsTable.id, deedIds));
+      for (const d of deeds) deedMap.set(d.id, { ...d, documentUrl: await this.sign(d.documentUrl) });
+    }
     return rows.map((row) => {
       const units = unitsByContract.get(row.id) ?? [];
       const first: any = units[0] ?? null;
@@ -132,7 +149,9 @@ export class TenantPortalController {
         propertyName: first?.propertyName ?? null,
         propertyCity: first?.propertyCity ?? null,
         propertyDistrict: first?.propertyDistrict ?? null,
+        propertyStreet: first?.propertyStreet ?? null,
         propertyType: first?.propertyType ?? null,
+        deed: first?.propertyDeedId ? (deedMap.get(first.propertyDeedId) ?? null) : null,
       };
     });
   }
@@ -142,7 +161,7 @@ export class TenantPortalController {
   async payments(@CurrentTenant() tenant: TenantPayload) {
     const [t] = await this.db.select().from(tenantsTable).where(eq(tenantsTable.id, tenant.id));
     if (!t || !t.phone) return [];
-    return this.db
+    const rows = await this.db
       .select({
         id: paymentsTable.id,
         contractId: paymentsTable.contractId,
@@ -158,6 +177,62 @@ export class TenantPortalController {
       .innerJoin(contractsTable, eq(paymentsTable.contractId, contractsTable.id))
       .where(eq(contractsTable.tenantPhone, t.phone))
       .orderBy(paymentsTable.dueDate);
+
+    // Attach the receipt(s) recorded against each installment — receipt number,
+    // amount, method, date and a signed URL to the uploaded proof, if any.
+    const ids = rows.map((r) => r.id);
+    const colls = ids.length
+      ? await this.db.select({
+          paymentId: paymentCollectionsTable.paymentId, amount: paymentCollectionsTable.amount,
+          collectedDate: paymentCollectionsTable.collectedDate, method: paymentCollectionsTable.method,
+          receiptNumber: paymentCollectionsTable.receiptNumber, attachmentKey: paymentCollectionsTable.attachmentKey,
+        }).from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.paymentId, ids))
+      : [];
+    const byPayment = new Map<number, any[]>();
+    for (const c of colls) {
+      if (c.paymentId == null) continue;
+      const list = byPayment.get(c.paymentId) ?? [];
+      list.push({
+        amount: this.num(c.amount), collectedDate: c.collectedDate, method: c.method,
+        receiptNumber: c.receiptNumber, proofUrl: await this.sign(c.attachmentKey),
+      });
+      byPayment.set(c.paymentId, list);
+    }
+    return rows.map((r) => {
+      const receipts = byPayment.get(r.id) ?? [];
+      return { ...r, amount: this.num(r.amount), collectedAmount: receipts.reduce((s, x) => s + x.amount, 0), receipts };
+    });
+  }
+
+  /* ── Tenant's invoices & receipt vouchers (approved only) ── */
+  @Get("invoices")
+  async invoices(@CurrentTenant() tenant: TenantPayload) {
+    const [t] = await this.db.select().from(tenantsTable).where(eq(tenantsTable.id, tenant.id));
+    if (!t || !t.phone) return [];
+    const myContracts = await this.db.select({ id: contractsTable.id }).from(contractsTable)
+      .where(eq(contractsTable.tenantPhone, t.phone));
+    const cids = myContracts.map((c) => c.id);
+    const scope = cids.length
+      ? or(eq(simpleInvoicesTable.tenantId, t.id), inArray(simpleInvoicesTable.contractId, cids))
+      : eq(simpleInvoicesTable.tenantId, t.id);
+    const rows = await this.db.select().from(simpleInvoicesTable)
+      .where(and(
+        eq(simpleInvoicesTable.type, "invoice"),
+        eq(simpleInvoicesTable.status, "confirmed"),   // confirmed == approved
+        sql`(${simpleInvoicesTable.kind} is null or ${simpleInvoicesTable.kind} in ('receipt','deposit'))`,
+        isNull(simpleInvoicesTable.deletedAt),
+        scope as any,
+      ))
+      .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id))
+      .limit(200);
+    return Promise.all(rows.map(async (r) => ({
+      id: r.id, number: r.number, kind: r.kind,
+      isVoucher: r.kind === "receipt" || r.kind === "deposit",
+      subtotal: this.num(r.subtotal), total: this.num(r.total),
+      items: r.items ?? [], issueDate: r.issueDate, paidDate: r.paidDate, dueDate: r.dueDate,
+      receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod, notes: r.notes,
+      attachmentUrl: await this.sign(r.attachmentKey),
+    })));
   }
 
   /* ── Maintenance: list own tickets ── */
