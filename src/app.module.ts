@@ -12,6 +12,7 @@ import { HealthModule } from "./modules/health/health.module";
 import { AuthModule } from "./modules/auth/auth.module";
 import { StatsModule } from "./modules/stats/stats.module";
 import { DashboardModule } from "./modules/dashboard/dashboard.module";
+import { MobileLandlordModule } from "./modules/mobile-landlord/mobile-landlord.module";
 import { DeedsModule } from "./modules/deeds/deeds.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UnitsModule } from "./modules/units/units.module";
@@ -60,6 +61,7 @@ import { ReportsModule } from "./modules/reports/reports.module";
     AuthModule,
     StatsModule,
     DashboardModule,
+    MobileLandlordModule,
     DeedsModule,
     PropertiesModule,
     UnitsModule,
