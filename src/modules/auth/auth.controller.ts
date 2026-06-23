@@ -183,6 +183,24 @@ export class AuthController {
     return this.auth.tenantVerifyOtp(body, clientCtx(req));
   }
 
+  // Landlord (USER) phone-OTP login for the mobile app — same phone+OTP UX as
+  // the tenant, but returns a user JWT.
+  @Post("user/phone-otp/request")
+  @HttpCode(200)
+  @Throttle({ short: { limit: 3, ttl: 60_000 }, long: { limit: 15, ttl: 3600_000 } })
+  @UseGuards(OtpThrottlerGuard)
+  userPhoneRequestOtp(@Body() body: { phone?: string }) {
+    return this.auth.userPhoneRequestOtp({ phone: body?.phone ?? "" });
+  }
+
+  @Post("user/phone-otp/verify")
+  @HttpCode(200)
+  @Throttle({ default: { limit: 15, ttl: 300_000 } })
+  @UseGuards(OtpThrottlerGuard)
+  userPhoneVerifyOtp(@Body() body: { phone?: string; code?: string }, @Req() req: Request) {
+    return this.auth.userPhoneVerifyOtp({ phone: body?.phone ?? "", code: body?.code ?? "" }, clientCtx(req));
+  }
+
   @Get("tenant/me")
   @UseGuards(TenantAuthGuard)
   tenantMe(@CurrentTenant() tenant: TenantPayload) {

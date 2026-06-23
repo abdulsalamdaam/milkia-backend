@@ -2,7 +2,7 @@ import { Injectable, Inject, BadRequestException, NotFoundException, Unauthorize
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
-import { and, desc, eq, gt, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { companiesTable, emailOtpTokensTable, loginLogsTable, rolesTable, tenantsTable, usersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
@@ -14,6 +14,24 @@ import { isPackagePlan } from "../../common/packages";
 import { hashEmailVerifyToken, newEmailVerifyOtp, verifyEmailOtpCode, EMAIL_VERIFY_OTP_TTL_MIN } from "../../common/email-verification";
 
 const MAX_FAILED = 5;
+
+/**
+ * Saudi mobile numbers are stored inconsistently (+966502907100, 966502907100,
+ * 0502907100, 502907100). To match regardless of format, reduce any input to its
+ * 9-digit core (5XXXXXXXX) and return every common stored variant for an IN()
+ * lookup. Fixes "+966… vs 05…" not matching.
+ */
+function phoneCore(raw: string): string {
+  let d = (raw || "").replace(/\D/g, "");
+  if (d.startsWith("966")) d = d.slice(3);
+  if (d.startsWith("0")) d = d.slice(1);
+  return d; // e.g. 502907100
+}
+function phoneVariants(raw: string): string[] {
+  const core = phoneCore(raw);
+  const set = new Set<string>([`+966${core}`, `966${core}`, `0${core}`, core, (raw || "").trim()]);
+  return [...set].filter(Boolean);
+}
 /** Email-OTP code lifetime — drives the DB expiry, the email text, and the
  *  expiresInMinutes returned to the client (the login screen's timer). */
 const EMAIL_OTP_TTL_MIN = 2;
@@ -632,7 +650,7 @@ export class AuthService {
     const raw = (input.phone || "").trim();
     if (!raw) throw new BadRequestException("رقم الجوال مطلوب");
     const phone = this.twilio.normalizePhone(raw);
-    const [tenant] = await this.db.select().from(tenantsTable).where(eq(tenantsTable.phone, phone));
+    const [tenant] = await this.db.select().from(tenantsTable).where(inArray(tenantsTable.phone, phoneVariants(raw)));
     if (!tenant || tenant.status !== "active") {
       // Don't disclose whether the tenant exists; respond generic.
       return { success: true, message: "إذا كان الرقم مسجّلاً، فقد أرسلنا رمز التحقق." };
@@ -650,7 +668,7 @@ export class AuthService {
     if (!raw || !code) throw new BadRequestException("رقم الجوال والرمز مطلوبان");
     const phone = this.twilio.normalizePhone(raw);
 
-    const [tenant] = await this.db.select().from(tenantsTable).where(eq(tenantsTable.phone, phone));
+    const [tenant] = await this.db.select().from(tenantsTable).where(inArray(tenantsTable.phone, phoneVariants(raw)));
     if (!tenant || tenant.status !== "active") {
       await this.recordLogin(null, phone, "failed", ctx.ip, ctx.ua);
       throw new UnauthorizedException("بيانات غير صحيحة");
@@ -683,6 +701,52 @@ export class AuthService {
         nationality: tenant.nationality,
       },
     };
+  }
+
+  /* ── Landlord (USER) phone-OTP login for the mobile app ──
+   * Mirrors the tenant phone flow but resolves a USER by phone and returns a
+   * USER JWT (kind "user"), so landlords use the same phone+OTP experience.
+   * SMS is paused like the tenant flow — the bypass code is "1234". */
+  async userPhoneRequestOtp(input: { phone: string }) {
+    const raw = (input.phone || "").trim();
+    if (!raw) throw new BadRequestException("رقم الجوال مطلوب");
+    const [user] = await this.db.select({ id: usersTable.id, isActive: usersTable.isActive })
+      .from(usersTable).where(and(inArray(usersTable.phone, phoneVariants(raw)), isNull(usersTable.deletedAt)));
+    // Generic response — don't disclose whether the number is registered.
+    if (!user || !user.isActive) return { success: true, message: "إذا كان الرقم مسجّلاً، فقد أرسلنا رمز التحقق." };
+    new Logger("AuthService").log(`[bypass] landlord OTP request for ${this.twilio.normalizePhone(raw)} — SMS skipped, accept code 1234`);
+    return { success: true, message: "تم إرسال رمز التحقق إلى جوالك." };
+  }
+
+  async userPhoneVerifyOtp(input: { phone: string; code: string }, ctx: { ip: string; ua?: string }) {
+    const raw = (input.phone || "").trim();
+    const code = (input.code || "").trim();
+    if (!raw || !code) throw new BadRequestException("رقم الجوال والرمز مطلوبان");
+    const phone = this.twilio.normalizePhone(raw);
+
+    const [user] = await this.db
+      .select({
+        id: usersTable.id, email: usersTable.email, name: usersTable.name, phone: usersTable.phone,
+        isActive: usersTable.isActive, accountStatus: usersTable.accountStatus,
+        tokenVersion: usersTable.tokenVersion, roleId: usersTable.roleId, ownerUserId: usersTable.ownerUserId,
+        roleKey: rolesTable.key,
+      })
+      .from(usersTable).leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
+      .where(and(inArray(usersTable.phone, phoneVariants(raw)), isNull(usersTable.deletedAt)));
+    if (!user || !user.isActive) {
+      await this.recordLogin(null, phone, "failed", ctx.ip, ctx.ua);
+      throw new UnauthorizedException("بيانات غير صحيحة");
+    }
+    // SMS paused — accept the hardcoded test code (same as the tenant flow).
+    if (code !== "1234") {
+      await this.recordLogin(user.id, phone, "failed", ctx.ip, ctx.ua);
+      throw new UnauthorizedException("رمز التحقق غير صحيح");
+    }
+    await this.db.update(usersTable).set({ lastLoginAt: new Date(), failedLoginAttempts: 0 }).where(eq(usersTable.id, user.id));
+    await this.recordLogin(user.id, user.email, "success", ctx.ip, ctx.ua);
+    const roleKey = user.roleKey ?? "user";
+    const token = this.signUserToken({ id: user.id, email: user.email, role: roleKey, tokenVersion: user.tokenVersion ?? 0 });
+    return { token, user: { id: user.id, name: user.name, email: user.email, phone: user.phone, role: roleKey } };
   }
 
   async tenantMe(tenantId: number) {
