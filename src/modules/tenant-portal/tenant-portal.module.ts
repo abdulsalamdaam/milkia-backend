@@ -200,7 +200,9 @@ export class TenantPortalController {
     }
     return rows.map((r) => {
       const receipts = byPayment.get(r.id) ?? [];
-      return { ...r, amount: this.num(r.amount), collectedAmount: receipts.reduce((s, x) => s + x.amount, 0), receipts };
+      // `amount` kept as the original string for client compatibility; the
+      // collected total + receipts are added alongside.
+      return { ...r, collectedAmount: receipts.reduce((s, x) => s + x.amount, 0), receipts };
     });
   }
 
