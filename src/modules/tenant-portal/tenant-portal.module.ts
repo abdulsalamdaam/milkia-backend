@@ -3,8 +3,9 @@ import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { IsIn, IsInt, IsOptional, IsString, MinLength } from "class-validator";
 import { Throttle } from "@nestjs/throttler";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import { contractsTable, contractUnitsTable, paymentsTable, paymentCollectionsTable, simpleInvoicesTable, deedsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable } from "@oqudk/database";
+import { contractsTable, contractUnitsTable, paymentsTable, paymentCollectionsTable, simpleInvoicesTable, deedsTable, unitsTable, propertiesTable, maintenanceRequestsTable, tenantsTable, companiesTable, usersTable } from "@oqudk/database";
 import { attachLookupLabels } from "../../common/lookups-resolve";
+import { invoiceQrSvg } from "../../common/zatca-qr";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { TenantAuthGuard, type TenantPayload } from "../../common/guards/tenant-auth.guard";
 import { CurrentTenant } from "../../common/decorators/current-tenant.decorator";
@@ -106,11 +107,31 @@ export class TenantPortalController {
           contractId: contractUnitsTable.contractId,
           unitId: unitsTable.id,
           unitNumber: unitsTable.unitNumber,
+          unitStatus: unitsTable.status,
+          unitFloor: unitsTable.floor,
+          unitArea: unitsTable.area,
+          unitBedrooms: unitsTable.bedrooms,
+          unitBathrooms: unitsTable.bathrooms,
+          unitLivingRooms: unitsTable.livingRooms,
+          unitHalls: unitsTable.halls,
+          unitParkingSpaces: unitsTable.parkingSpaces,
+          unitRentPrice: unitsTable.rentPrice,
+          unitFurnishing: unitsTable.furnishing,
+          unitKitchenType: unitsTable.kitchenType,
+          unitAcUnits: unitsTable.acUnits,
+          unitAcType: unitsTable.acType,
+          unitFiber: unitsTable.fiber,
+          unitElectricityMeter: unitsTable.electricityMeter,
+          unitWaterMeter: unitsTable.waterMeter,
+          unitGasMeter: unitsTable.gasMeter,
+          unitYearBuilt: unitsTable.yearBuilt,
           propertyId: propertiesTable.id,
           propertyName: propertiesTable.name,
           propertyCityLookupId: propertiesTable.cityLookupId,
           propertyDistrict: propertiesTable.district,
           propertyStreet: propertiesTable.street,
+          propertyBuildingNumber: propertiesTable.buildingNumber,
+          propertyPostalCode: propertiesTable.postalCode,
           propertyTypeLookupId: propertiesTable.typeLookupId,
           propertyDeedId: propertiesTable.deedId,
         })
@@ -150,6 +171,8 @@ export class TenantPortalController {
         propertyCity: first?.propertyCity ?? null,
         propertyDistrict: first?.propertyDistrict ?? null,
         propertyStreet: first?.propertyStreet ?? null,
+        propertyBuildingNumber: first?.propertyBuildingNumber ?? null,
+        propertyPostalCode: first?.propertyPostalCode ?? null,
         propertyType: first?.propertyType ?? null,
         deed: first?.propertyDeedId ? (deedMap.get(first.propertyDeedId) ?? null) : null,
       };
@@ -227,14 +250,73 @@ export class TenantPortalController {
       ))
       .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id))
       .limit(200);
-    return Promise.all(rows.map(async (r) => ({
-      id: r.id, number: r.number, kind: r.kind,
-      isVoucher: r.kind === "receipt" || r.kind === "deposit",
-      subtotal: this.num(r.subtotal), total: this.num(r.total),
-      items: r.items ?? [], issueDate: r.issueDate, paidDate: r.paidDate, dueDate: r.dueDate,
-      receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod, notes: r.notes,
-      attachmentUrl: await this.sign(r.attachmentKey),
-    })));
+    if (!rows.length) return [];
+
+    // Seller = the contract's LANDLORD (المؤجر) per-field, with the managing
+    // account's company filling any gaps — exactly like the web tax-invoice view.
+    const contractIds = [...new Set(rows.map((r) => r.contractId).filter((x): x is number => !!x))];
+    const landlordById = new Map<number, typeof contractsTable.$inferSelect>();
+    if (contractIds.length) {
+      const cs = await this.db.select().from(contractsTable).where(inArray(contractsTable.id, contractIds));
+      for (const c of cs) landlordById.set(c.id, c);
+    }
+    // Account company (logo + fallback seller details), keyed by invoice.userId.
+    const userIds = [...new Set(rows.map((r) => r.userId))];
+    const companyByUser = new Map<number, typeof companiesTable.$inferSelect>();
+    if (userIds.length) {
+      const us = await this.db.select({ id: usersTable.id, companyId: usersTable.companyId }).from(usersTable).where(inArray(usersTable.id, userIds));
+      const companyIds = [...new Set(us.map((u) => u.companyId).filter((x): x is number => !!x))];
+      const cos = companyIds.length ? await this.db.select().from(companiesTable).where(inArray(companiesTable.id, companyIds)) : [];
+      const coById = new Map(cos.map((c) => [c.id, c]));
+      for (const u of us) if (u.companyId && coById.has(u.companyId)) companyByUser.set(u.id, coById.get(u.companyId)!);
+    }
+    // Sign each distinct company logo once.
+    const logoUrlByKey = new Map<string, string | null>();
+    for (const co of new Set([...companyByUser.values()].map((c) => c.logoKey).filter((k): k is string => !!k))) {
+      logoUrlByKey.set(co, await this.sign(co));
+    }
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const pick = (...v: (string | null | undefined)[]) => v.find((x) => x && String(x).trim()) ?? null;
+
+    return Promise.all(rows.map(async (r) => {
+      const c = r.contractId ? landlordById.get(r.contractId) : undefined;
+      const co = companyByUser.get(r.userId);
+      const companyAddress = co ? [co.address, co.district, co.city, co.region].filter(Boolean).join("، ") : null;
+      const seller = {
+        name: pick(c?.landlordName, co?.name),
+        phone: pick(c?.landlordPhone, co?.companyPhone),
+        email: pick(c?.landlordEmail, co?.officialEmail),
+        address: pick(c?.landlordAddress, companyAddress),
+        vatNumber: pick(c?.landlordTaxNumber, co?.vatNumber),
+      };
+      const buyer = {
+        name: pick(r.tenantName, t.name),
+        phone: pick(r.client?.phone, t.phone),
+        email: pick(r.client?.email, t.email),
+        address: pick(r.client?.address, t.address),
+        vatNumber: pick(r.client?.vatNumber, (t as any).taxNumber),
+      };
+      const subtotal = this.num(r.subtotal);
+      const total = this.num(r.total);
+      const vat = round2(total - subtotal);
+      const isVoucher = r.kind === "receipt" || r.kind === "deposit";
+      // ZATCA Phase-1 QR — only on tax invoices (vouchers/سند قبض carry none).
+      const qrSvg = !isVoucher && vat > 0.01
+        ? invoiceQrSvg({ sellerName: seller.name, vatNumber: seller.vatNumber, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
+        : null;
+      return {
+        id: r.id, number: r.number, type: r.type, kind: r.kind, isVoucher,
+        buyerHasVat: !!buyer.vatNumber,
+        subtotal, total, vat,
+        items: r.items ?? [], issueDate: r.issueDate, paidDate: r.paidDate, dueDate: r.dueDate,
+        receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod,
+        billingReference: r.billingReference, notes: r.notes,
+        seller, buyer, qrSvg,
+        attachmentUrl: await this.sign(r.attachmentKey),
+        // lets the client pick image preview vs. file link
+        attachmentIsImage: !!r.attachmentKey && /\.(jpe?g|png|gif|webp|bmp)$/i.test(r.attachmentKey),
+      };
+    }));
   }
 
   /* ── Maintenance: list own tickets ── */
