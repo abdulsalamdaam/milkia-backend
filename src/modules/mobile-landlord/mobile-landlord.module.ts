@@ -1,15 +1,18 @@
 import { Controller, Get, Inject, Module, NotFoundException, Param, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
-import { and, eq, isNull, inArray, desc } from "drizzle-orm";
+import { and, eq, isNull, inArray, desc, sql } from "drizzle-orm";
 import {
   usersTable, ownersTable, propertiesTable, unitsTable, contractsTable, contractUnitsTable,
-  paymentsTable, paymentCollectionsTable, tenantsTable, deedsTable,
+  paymentsTable, paymentCollectionsTable, tenantsTable, deedsTable, maintenanceRequestsTable,
+  simpleInvoicesTable, companiesTable,
 } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import { scopeId } from "../../common/scope";
+import { attachLookupLabels } from "../../common/lookups-resolve";
+import { invoiceQrSvg } from "../../common/zatca-qr";
 import { UploadsService } from "../uploads/uploads.service";
 
 /**
@@ -89,6 +92,43 @@ class LandlordMobileController {
     };
   }
 
+  /** Recent-activity feed for the home screen (newest first): new contracts,
+   *  collected payments and maintenance requests, merged + date-sorted. */
+  @Get("recent-activity")
+  async recentActivity(@CurrentUser() user: AuthUser) {
+    const uid = scopeId(user);
+    type Item = { type: "contract" | "payment" | "maintenance"; title: string; subtitle: string; date: string | null };
+    const items: Item[] = [];
+
+    const contracts = await this.db.select({
+      contractNumber: contractsTable.contractNumber, tenantName: contractsTable.tenantName, createdAt: contractsTable.createdAt,
+    }).from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)))
+      .orderBy(desc(contractsTable.createdAt)).limit(6);
+    for (const c of contracts) items.push({
+      type: "contract", title: c.tenantName || c.contractNumber || "", subtitle: c.contractNumber || "",
+      date: c.createdAt ? new Date(c.createdAt).toISOString() : null,
+    });
+
+    const paid = await this.db.select({ amount: paymentsTable.amount, paidDate: paymentsTable.paidDate, contractNumber: contractsTable.contractNumber })
+      .from(paymentsTable).leftJoin(contractsTable, eq(contractsTable.id, paymentsTable.contractId))
+      .where(and(eq(paymentsTable.userId, uid), eq(paymentsTable.status, "paid"), isNull(paymentsTable.deletedAt)))
+      .orderBy(desc(paymentsTable.paidDate)).limit(6);
+    for (const p of paid) items.push({
+      type: "payment", title: String(this.num(p.amount)), subtitle: p.contractNumber || "",
+      date: p.paidDate ? new Date(p.paidDate).toISOString() : null,
+    });
+
+    const maint = await this.db.select({ description: maintenanceRequestsTable.description, unitLabel: maintenanceRequestsTable.unitLabel, createdAt: maintenanceRequestsTable.createdAt })
+      .from(maintenanceRequestsTable).where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt)))
+      .orderBy(desc(maintenanceRequestsTable.createdAt)).limit(6);
+    for (const m of maint) items.push({
+      type: "maintenance", title: m.description || "", subtitle: m.unitLabel || "",
+      date: m.createdAt ? new Date(m.createdAt).toISOString() : null,
+    });
+
+    return items.sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 8);
+  }
+
   /** Properties with occupancy. */
   @Get("properties")
   async properties(@CurrentUser() user: AuthUser) {
@@ -101,28 +141,56 @@ class LandlordMobileController {
       ? await this.db.select({ id: unitsTable.id, propertyId: unitsTable.propertyId, status: unitsTable.status })
           .from(unitsTable).where(and(inArray(unitsTable.propertyId, propIds), isNull(unitsTable.deletedAt)))
       : [];
-    return props.map((p) => {
+    const rows = props.map((p) => {
       const us = units.filter((u) => u.propertyId === p.id);
       const rented = us.filter((u) => u.status === "rented").length;
       return {
         id: p.id, name: p.name, status: (p as any).status ?? null,
+        district: (p as any).district ?? null, street: (p as any).street ?? null, deedNumber: (p as any).deedNumber ?? null,
+        typeLookupId: (p as any).typeLookupId ?? null, usageLookupId: (p as any).usageLookupId ?? null, cityLookupId: (p as any).cityLookupId ?? null,
         unitsCount: us.length, rentedUnits: rented,
         occupancyRate: us.length ? Math.round((rented / us.length) * 100) : 0,
       };
     });
+    await attachLookupLabels(this.db, rows as any[], [
+      { idField: "typeLookupId", out: "type", mode: "labelAr" },   // badge text, e.g. "عمارة سكنية"
+      { idField: "usageLookupId", out: "usage", mode: "key" },     // filter key: residential/commercial/mixed
+      { idField: "cityLookupId", out: "city", mode: "labelAr" },
+    ]);
+    return rows;
   }
 
-  /** Units across the portfolio (with the current tenant, if any). */
+  /** Units across the portfolio (with full specs + the current tenant). */
   @Get("units")
   async units(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
     const rows = await this.db
-      .select({ id: unitsTable.id, unitNumber: unitsTable.unitNumber, status: unitsTable.status, propertyName: propertiesTable.name })
+      .select({
+        id: unitsTable.id, unitNumber: unitsTable.unitNumber, status: unitsTable.status,
+        propertyId: unitsTable.propertyId, propertyName: propertiesTable.name,
+        rentPrice: unitsTable.rentPrice, area: unitsTable.area, floor: unitsTable.floor,
+        bedrooms: unitsTable.bedrooms, bathrooms: unitsTable.bathrooms, typeLookupId: unitsTable.typeLookupId,
+      })
       .from(unitsTable)
       .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
       .where(and(eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt), isNull(propertiesTable.deletedAt)))
       .orderBy(desc(unitsTable.createdAt));
-    return rows;
+    // Current tenant per unit (via the active contract).
+    const unitIds = rows.map((r) => r.id);
+    const cu = unitIds.length
+      ? await this.db.select({ unitId: contractUnitsTable.unitId, tenantName: contractsTable.tenantName })
+          .from(contractUnitsTable)
+          .innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+          .where(and(inArray(contractUnitsTable.unitId, unitIds), eq(contractsTable.status, "active"), isNull(contractsTable.deletedAt)))
+      : [];
+    const tenantByUnit = new Map<number, string>();
+    for (const r of cu) if (r.tenantName) tenantByUnit.set(r.unitId, r.tenantName);
+    const out = rows.map((r) => ({
+      ...r, rentPrice: r.rentPrice != null ? this.num(r.rentPrice) : null,
+      tenantName: tenantByUnit.get(r.id) ?? null,
+    }));
+    await attachLookupLabels(this.db, out as any[], [{ idField: "typeLookupId", out: "type", mode: "labelAr" }]);
+    return out;
   }
 
   /** Active + past contracts, each with its property + units + tenant. */
@@ -159,22 +227,111 @@ class LandlordMobileController {
     }));
   }
 
-  /** Tenants in the portfolio. */
+  /** Tenants in the portfolio — with nationality, contract count and the
+   *  linked property/unit from their active (or latest) contract. */
   @Get("tenants")
   async tenants(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
-    return this.db.select({ id: tenantsTable.id, name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email, type: tenantsTable.type, status: tenantsTable.status })
-      .from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))
+    const tenants = await this.db.select({
+      id: tenantsTable.id, name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email,
+      type: tenantsTable.type, status: tenantsTable.status, nationality: tenantsTable.nationality,
+    }).from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))
       .orderBy(desc(tenantsTable.createdAt));
+
+    // Contracts (with first property/unit) grouped by the tenant's phone.
+    const contracts = await this.db.select({ id: contractsTable.id, tenantPhone: contractsTable.tenantPhone, status: contractsTable.status })
+      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+    const cids = contracts.map((c) => c.id);
+    const cu = cids.length
+      ? await this.db.select({ contractId: contractUnitsTable.contractId, unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
+          .from(contractUnitsTable)
+          .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+          .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+          .where(inArray(contractUnitsTable.contractId, cids))
+      : [];
+    const firstUnitOf = new Map<number, { unitNumber: string | null; propertyName: string | null }>();
+    for (const r of cu) if (!firstUnitOf.has(r.contractId)) firstUnitOf.set(r.contractId, { unitNumber: r.unitNumber, propertyName: r.propertyName });
+
+    const byPhone = new Map<string, { count: number; active: typeof contracts }>();
+    for (const c of contracts) {
+      const key = (c.tenantPhone || "").replace(/\D/g, "").slice(-9);
+      if (!key) continue;
+      const e = byPhone.get(key) ?? { count: 0, active: [] };
+      e.count += 1; e.active.push(c); byPhone.set(key, e);
+    }
+    return tenants.map((t) => {
+      const key = (t.phone || "").replace(/\D/g, "").slice(-9);
+      const grp = key ? byPhone.get(key) : undefined;
+      const chosen = grp?.active.find((c) => c.status === "active") ?? grp?.active[0];
+      const link = chosen ? firstUnitOf.get(chosen.id) : undefined;
+      return {
+        ...t, contractsCount: grp?.count ?? 0,
+        contractStatus: chosen?.status ?? null,
+        property: link?.propertyName ?? null, unitNumber: link?.unitNumber ?? null,
+      };
+    });
   }
 
-  /** The landlords (owners) held by this account. */
+  /** The landlords (owners) held by this account — with each one's property +
+   *  unit counts and collected revenue. */
   @Get("owners")
   async owners(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
-    return this.db.select({ id: ownersTable.id, name: ownersTable.name, phone: ownersTable.phone, email: ownersTable.email, type: ownersTable.type, status: ownersTable.status, taxNumber: ownersTable.taxNumber, iban: ownersTable.iban })
+    const owners = await this.db.select({ id: ownersTable.id, name: ownersTable.name, phone: ownersTable.phone, email: ownersTable.email, type: ownersTable.type, status: ownersTable.status, taxNumber: ownersTable.taxNumber, iban: ownersTable.iban, isDefault: ownersTable.isDefault })
       .from(ownersTable).where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)))
       .orderBy(desc(ownersTable.createdAt));
+
+    // Properties (with unit counts) grouped by ownerId.
+    const props = await this.db.select({ id: propertiesTable.id, ownerId: propertiesTable.ownerId })
+      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+    const propIds = props.map((p) => p.id);
+    const units = propIds.length
+      ? await this.db.select({ propertyId: unitsTable.propertyId }).from(unitsTable)
+          .where(and(inArray(unitsTable.propertyId, propIds), isNull(unitsTable.deletedAt)))
+      : [];
+    const unitsByProp = new Map<number, number>();
+    for (const u of units) unitsByProp.set(u.propertyId, (unitsByProp.get(u.propertyId) ?? 0) + 1);
+
+    return owners.map((o) => {
+      const myProps = props.filter((p) => p.ownerId === o.id);
+      const unitsCount = myProps.reduce((s, p) => s + (unitsByProp.get(p.id) ?? 0), 0);
+      return { ...o, propertiesCount: myProps.length, unitsCount };
+    });
+  }
+
+  /** One landlord's FULL detail + their properties + contracts (read-only). */
+  @Get("owners/:id")
+  async owner(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const uid = scopeId(user);
+    const oid = parseInt(id, 10);
+    const [o] = await this.db.select().from(ownersTable)
+      .where(and(eq(ownersTable.id, oid), eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)));
+    if (!o) throw new NotFoundException("Landlord not found");
+    const properties = await this.db.select({ id: propertiesTable.id, name: propertiesTable.name, district: propertiesTable.district })
+      .from(propertiesTable).where(and(eq(propertiesTable.ownerId, oid), eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+    const propIds = properties.map((p) => p.id);
+    const units = propIds.length
+      ? await this.db.select({ propertyId: unitsTable.propertyId }).from(unitsTable)
+          .where(and(inArray(unitsTable.propertyId, propIds), isNull(unitsTable.deletedAt)))
+      : [];
+    const unitsByProp = new Map<number, number>();
+    for (const u of units) unitsByProp.set(u.propertyId, (unitsByProp.get(u.propertyId) ?? 0) + 1);
+    // Contracts whose landlord matches this owner (by name/id snapshot).
+    const contracts = await this.db.select({
+      id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
+      tenantName: contractsTable.tenantName, monthlyRent: contractsTable.monthlyRent,
+      startDate: contractsTable.startDate, endDate: contractsTable.endDate,
+      landlordName: contractsTable.landlordName, landlordIdNumber: contractsTable.landlordIdNumber,
+    }).from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+    const mine = contracts.filter((c) =>
+      (o.idNumber && c.landlordIdNumber && c.landlordIdNumber === o.idNumber) ||
+      (o.name && c.landlordName === o.name));
+    return {
+      ...o,
+      representativeDocUrl: await this.sign((o as any).representativeDocUrl),
+      properties: properties.map((p) => ({ ...p, unitsCount: unitsByProp.get(p.id) ?? 0 })),
+      contracts: mine.map((c) => ({ id: c.id, contractNumber: c.contractNumber, status: c.status, tenantName: c.tenantName, monthlyRent: this.num(c.monthlyRent), startDate: c.startDate, endDate: c.endDate })),
+    };
   }
 
   /** Payment schedule across the portfolio + a small summary. */
@@ -194,20 +351,33 @@ class LandlordMobileController {
       .where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)))
       .orderBy(desc(paymentsTable.dueDate));
 
-    // Collected amount per payment (for partial-payment display).
+    // Full collection log per payment — each collection with its evidence
+    // (proof) attachment resolved to a signed URL, so the app shows the log.
     const ids = rows.map((r) => r.id);
     const coll = ids.length
-      ? await this.db.select({ paymentId: paymentCollectionsTable.paymentId, amount: paymentCollectionsTable.amount })
-          .from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.paymentId, ids))
+      ? await this.db.select({
+          paymentId: paymentCollectionsTable.paymentId, amount: paymentCollectionsTable.amount,
+          collectedDate: paymentCollectionsTable.collectedDate, method: paymentCollectionsTable.method,
+          receiptNumber: paymentCollectionsTable.receiptNumber, attachmentKey: paymentCollectionsTable.attachmentKey,
+        }).from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.paymentId, ids))
+          .orderBy(desc(paymentCollectionsTable.collectedDate))
       : [];
+    const receiptsByPayment = new Map<number, any[]>();
     const collMap = new Map<number, number>();
-    for (const c of coll) if (c.paymentId != null) collMap.set(c.paymentId, (collMap.get(c.paymentId) ?? 0) + this.num(c.amount));
+    for (const c of coll) {
+      if (c.paymentId == null) continue;
+      collMap.set(c.paymentId, (collMap.get(c.paymentId) ?? 0) + this.num(c.amount));
+      const list = receiptsByPayment.get(c.paymentId) ?? [];
+      list.push({ amount: this.num(c.amount), collectedDate: c.collectedDate, method: c.method, receiptNumber: c.receiptNumber, proofUrl: await this.sign(c.attachmentKey) });
+      receiptsByPayment.set(c.paymentId, list);
+    }
 
     const data = rows.map((r) => ({
       id: r.id, amount: this.num(r.amount), dueDate: r.dueDate, paidDate: r.paidDate,
       status: r.status, receiptNumber: r.receiptNumber, description: r.description,
       contractNumber: r.contractNumber, tenantName: r.tenantName,
       collectedAmount: Math.round((collMap.get(r.id) ?? 0) * 100) / 100,
+      receipts: receiptsByPayment.get(r.id) ?? [],
     }));
     const summary = {
       paid: data.filter((d) => d.status === "paid").reduce((s, d) => s + d.amount, 0),
@@ -216,6 +386,134 @@ class LandlordMobileController {
       overdueCount: data.filter((d) => d.status === "overdue").length,
     };
     return { data, summary };
+  }
+
+  /** Issued tax invoices + receipt vouchers for the account (ZATCA-style). */
+  @Get("invoices")
+  async invoices(@CurrentUser() user: AuthUser) {
+    const uid = scopeId(user);
+    const rows = await this.db.select().from(simpleInvoicesTable)
+      .where(and(
+        eq(simpleInvoicesTable.userId, uid),
+        eq(simpleInvoicesTable.status, "confirmed"),
+        isNull(simpleInvoicesTable.deletedAt),
+      ))
+      .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id)).limit(300);
+    if (!rows.length) return [];
+
+    // Seller identity for the ZATCA QR (the account company, if any).
+    const [u] = await this.db.select({ companyId: usersTable.companyId }).from(usersTable).where(eq(usersTable.id, uid));
+    let sellerName: string | null = null, sellerVat: string | null = null;
+    if (u?.companyId) {
+      const [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, u.companyId));
+      sellerName = co?.name ?? null; sellerVat = co?.vatNumber ?? null;
+    }
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+    return Promise.all(rows.map(async (r) => {
+      const subtotal = this.num(r.subtotal), total = this.num(r.total), vat = round2(total - subtotal);
+      const isVoucher = r.kind === "receipt" || r.kind === "deposit";
+      const qrSvg = !isVoucher && vat > 0.01
+        ? invoiceQrSvg({ sellerName, vatNumber: sellerVat, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
+        : null;
+      return {
+        id: r.id, number: r.number, type: r.type, kind: r.kind, isVoucher,
+        buyerName: r.tenantName ?? null, subtotal, total, vat, status: r.status,
+        issueDate: r.issueDate, dueDate: r.dueDate, paidDate: r.paidDate,
+        receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod, billingReference: r.billingReference,
+        notes: r.notes, items: r.items ?? [],
+        qrSvg, attachmentUrl: await this.sign(r.attachmentKey),
+      };
+    }));
+  }
+
+  /** Reports: headline stats, a 6-month collected-vs-expected series, and
+   *  per-property performance (collected revenue + occupancy). */
+  @Get("reports")
+  async reports(@CurrentUser() user: AuthUser) {
+    const uid = scopeId(user);
+    const props = await this.db.select({ id: propertiesTable.id, name: propertiesTable.name })
+      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+    const propIds = props.map((p) => p.id);
+    const units = propIds.length
+      ? await this.db.select({ propertyId: unitsTable.propertyId, status: unitsTable.status })
+          .from(unitsTable).where(and(inArray(unitsTable.propertyId, propIds), isNull(unitsTable.deletedAt)))
+      : [];
+    const unitsCount = units.length;
+    const rented = units.filter((u) => u.status === "rented").length;
+
+    const contracts = await this.db.select({ status: contractsTable.status, monthlyRent: contractsTable.monthlyRent })
+      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+    const monthlyRecurring = contracts.filter((c) => c.status === "active").reduce((s, c) => s + this.num(c.monthlyRent), 0);
+
+    const payments = await this.db.select({ amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status, contractId: paymentsTable.contractId })
+      .from(paymentsTable).where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
+
+    // contract → property
+    const cIds = [...new Set(payments.map((p) => p.contractId).filter((x): x is number => !!x))];
+    const cu = cIds.length
+      ? await this.db.select({ contractId: contractUnitsTable.contractId, propertyId: propertiesTable.id })
+          .from(contractUnitsTable).innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+          .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+          .where(inArray(contractUnitsTable.contractId, cIds))
+      : [];
+    const propByContract = new Map<number, number>();
+    for (const r of cu) if (!propByContract.has(r.contractId)) propByContract.set(r.contractId, r.propertyId);
+
+    // 6-month series
+    const months: string[] = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) { const d = new Date(now.getFullYear(), now.getMonth() - i, 1); months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`); }
+    const idx = new Map(months.map((m, i) => [m, i]));
+    const monthlySeries = months.map((m) => ({ month: m, collected: 0, expected: 0 }));
+    for (const p of payments) {
+      const due = (p.dueDate || "").slice(0, 7); const paid = (p.paidDate || "").slice(0, 7);
+      if (idx.has(due)) monthlySeries[idx.get(due)!].expected += this.num(p.amount);
+      if (p.status === "paid" && idx.has(paid)) monthlySeries[idx.get(paid)!].collected += this.num(p.amount);
+    }
+
+    const collectedByProp = new Map<number, number>();
+    for (const p of payments) {
+      if (p.status !== "paid" || !p.contractId) continue;
+      const pid = propByContract.get(p.contractId); if (pid == null) continue;
+      collectedByProp.set(pid, (collectedByProp.get(pid) ?? 0) + this.num(p.amount));
+    }
+    const propertyPerformance = props.map((p) => {
+      const us = units.filter((u) => u.propertyId === p.id);
+      const occ = us.length ? Math.round((us.filter((u) => u.status === "rented").length / us.length) * 100) : 0;
+      return { name: p.name, collected: Math.round(collectedByProp.get(p.id) ?? 0), occupancy: occ };
+    }).sort((a, b) => b.collected - a.collected).slice(0, 8);
+
+    const collectedTotal = payments.filter((p) => p.status === "paid").reduce((s, p) => s + this.num(p.amount), 0);
+    const expectedTotal = payments.reduce((s, p) => s + this.num(p.amount), 0);
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const monthlyRevenue = payments.filter((p) => p.status === "paid" && p.paidDate?.startsWith(monthKey)).reduce((s, p) => s + this.num(p.amount), 0);
+
+    return {
+      occupancyRate: unitsCount ? Math.round((rented / unitsCount) * 100) : 0,
+      monthlyRevenue, collectedTotal, expectedTotal,
+      avgRent: rented ? Math.round(monthlyRecurring / rented) : 0,
+      collectionRate: expectedTotal > 0 ? Math.round((collectedTotal / expectedTotal) * 100) : 0,
+      monthlySeries, propertyPerformance,
+    };
+  }
+
+  /** Maintenance requests across the portfolio (view-only). */
+  @Get("maintenance")
+  async maintenance(@CurrentUser() user: AuthUser) {
+    const uid = scopeId(user);
+    const rows = await this.db.select({
+      id: maintenanceRequestsTable.id, unitLabel: maintenanceRequestsTable.unitLabel,
+      description: maintenanceRequestsTable.description, priority: maintenanceRequestsTable.priority,
+      status: maintenanceRequestsTable.status, supplier: maintenanceRequestsTable.supplier,
+      estimatedCost: maintenanceRequestsTable.estimatedCost, createdAt: maintenanceRequestsTable.createdAt,
+      tenantName: tenantsTable.name, contractNumber: contractsTable.contractNumber,
+    }).from(maintenanceRequestsTable)
+      .leftJoin(tenantsTable, eq(tenantsTable.id, maintenanceRequestsTable.tenantId))
+      .leftJoin(contractsTable, eq(contractsTable.id, maintenanceRequestsTable.contractId))
+      .where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt)))
+      .orderBy(desc(maintenanceRequestsTable.createdAt));
+    return rows.map((r) => ({ ...r, estimatedCost: r.estimatedCost != null ? this.num(r.estimatedCost) : null }));
   }
 
   /** Collections (money actually received). */
@@ -264,15 +562,36 @@ class LandlordMobileController {
         .where(and(eq(deedsTable.id, p.deedId), isNull(deedsTable.deletedAt)));
       if (d) deed = { ...d, documentUrl: await this.sign(d.documentUrl) };
     }
-    return {
+    // Financial summary across the property's contracts.
+    const cIds = contracts.map((c) => c.id);
+    const pays = cIds.length
+      ? await this.db.select({ amount: paymentsTable.amount, status: paymentsTable.status })
+          .from(paymentsTable).where(and(inArray(paymentsTable.contractId, cIds), isNull(paymentsTable.deletedAt)))
+      : [];
+    const finance = {
+      collected: pays.filter((x) => x.status === "paid").reduce((s, x) => s + this.num(x.amount), 0),
+      outstanding: pays.filter((x) => x.status === "pending" || x.status === "overdue").reduce((s, x) => s + this.num(x.amount), 0),
+      overdue: pays.filter((x) => x.status === "overdue").reduce((s, x) => s + this.num(x.amount), 0),
+    };
+    const result: any = {
       ...p,
       imageUrl: await this.sign((p as any).imageKey),
       deed,
+      occupancyRate: units.length ? Math.round((units.filter((u) => u.status === "rented").length / units.length) * 100) : 0,
       rentedUnits: units.filter((u) => u.status === "rented").length,
       availableUnits: units.filter((u) => u.status === "available").length,
       units: units.map((u) => ({ ...u, rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null })),
       contracts: contracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })),
+      finance,
     };
+    // Resolve lookup labels (type/usage/region/city) so the app shows words, not IDs.
+    await attachLookupLabels(this.db, [result], [
+      { idField: "typeLookupId", out: "type", mode: "labelAr" },
+      { idField: "usageLookupId", out: "usage", mode: "labelAr" },
+      { idField: "regionLookupId", out: "region", mode: "labelAr" },
+      { idField: "cityLookupId", out: "city", mode: "labelAr" },
+    ]);
+    return result;
   }
 
   /** One unit's FULL detail + its current active contract/tenant. */
@@ -293,13 +612,43 @@ class LandlordMobileController {
       .where(and(eq(contractUnitsTable.unitId, unitId), eq(contractsTable.status, "active"), isNull(contractsTable.deletedAt)))
       .limit(1);
     const u = row.unit;
-    return {
+    // All contracts that ever covered this unit (not just the active one).
+    const allContracts = await this.db.selectDistinct({
+      id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
+      tenantName: contractsTable.tenantName, monthlyRent: contractsTable.monthlyRent,
+      startDate: contractsTable.startDate, endDate: contractsTable.endDate,
+    }).from(contractUnitsTable).innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+      .where(and(eq(contractUnitsTable.unitId, unitId), isNull(contractsTable.deletedAt)));
+    // Financial summary for this unit (across its contracts).
+    const cIds = allContracts.map((c) => c.id);
+    const pays = cIds.length
+      ? await this.db.select({ amount: paymentsTable.amount, status: paymentsTable.status })
+          .from(paymentsTable).where(and(inArray(paymentsTable.contractId, cIds), isNull(paymentsTable.deletedAt)))
+      : [];
+    const finance = {
+      collected: pays.filter((x) => x.status === "paid").reduce((s, x) => s + this.num(x.amount), 0),
+      outstanding: pays.filter((x) => x.status === "pending" || x.status === "overdue").reduce((s, x) => s + this.num(x.amount), 0),
+      overdue: pays.filter((x) => x.status === "overdue").reduce((s, x) => s + this.num(x.amount), 0),
+    };
+    // Sign each attached document.
+    const docs = Array.isArray((u as any).documents) ? (u as any).documents : [];
+    const documents = await Promise.all(docs.map(async (d: any) => ({ ...d, url: await this.sign(d.key) })));
+    const result: any = {
       ...u,
       rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null,
       imageUrl: await this.sign((u as any).imageKey), floorPlanUrl: await this.sign((u as any).floorPlanKey),
+      documents,
       property: row.propertyName, propertyId: row.propertyId,
       currentContract: cu ? { ...cu, monthlyRent: this.num(cu.monthlyRent) } : null,
+      contracts: allContracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })),
+      finance,
     };
+    await attachLookupLabels(this.db, [result], [
+      { idField: "typeLookupId", out: "type", mode: "labelAr" },
+      { idField: "directionLookupId", out: "direction", mode: "labelAr" },
+      { idField: "finishingLookupId", out: "finishing", mode: "labelAr" },
+    ]);
+    return result;
   }
 
   /** One tenant's full detail + their contracts (read-only). */
@@ -310,13 +659,34 @@ class LandlordMobileController {
     const [t] = await this.db.select().from(tenantsTable)
       .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)));
     if (!t) throw new NotFoundException("Tenant not found");
-    const contracts = await this.db.select({
+    // Match contracts by tenantId OR the tenant's phone (legacy contracts).
+    const phoneCore = (t.phone || "").replace(/\D/g, "").slice(-9);
+    const contractsRaw = await this.db.select({
       id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
       monthlyRent: contractsTable.monthlyRent, startDate: contractsTable.startDate, endDate: contractsTable.endDate,
+      tenantPhone: contractsTable.tenantPhone, tenantId: contractsTable.tenantId,
     }).from(contractsTable)
-      .where(and(eq(contractsTable.userId, uid), eq(contractsTable.tenantId, tid), isNull(contractsTable.deletedAt)))
+      .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)))
       .orderBy(desc(contractsTable.createdAt));
-    return { ...t, contracts: contracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })) };
+    const contracts = contractsRaw.filter((c) => c.tenantId === tid || (phoneCore && (c.tenantPhone || "").replace(/\D/g, "").slice(-9) === phoneCore));
+    const cids = contracts.map((c) => c.id);
+    const cu = cids.length
+      ? await this.db.select({ contractId: contractUnitsTable.contractId, unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
+          .from(contractUnitsTable).innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+          .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+          .where(inArray(contractUnitsTable.contractId, cids))
+      : [];
+    const linkOf = new Map<number, { unitNumber: string | null; propertyName: string | null }>();
+    for (const r of cu) if (!linkOf.has(r.contractId)) linkOf.set(r.contractId, { unitNumber: r.unitNumber, propertyName: r.propertyName });
+    return {
+      ...t,
+      representativeDocUrl: await this.sign((t as any).representativeDocUrl),
+      contracts: contracts.map((c) => ({
+        id: c.id, contractNumber: c.contractNumber, status: c.status, monthlyRent: this.num(c.monthlyRent),
+        startDate: c.startDate, endDate: c.endDate,
+        unitNumber: linkOf.get(c.id)?.unitNumber ?? null, propertyName: linkOf.get(c.id)?.propertyName ?? null,
+      })),
+    };
   }
 
   /** One contract's full detail (read-only). */
@@ -332,19 +702,43 @@ class LandlordMobileController {
       .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
       .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
       .where(eq(contractUnitsTable.contractId, cid));
-    const pays = await this.db.select({ id: paymentsTable.id, amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status })
+    const pays = await this.db.select({ id: paymentsTable.id, amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status, receiptNumber: paymentsTable.receiptNumber, description: paymentsTable.description })
       .from(paymentsTable).where(and(eq(paymentsTable.contractId, cid), isNull(paymentsTable.deletedAt)))
       .orderBy(paymentsTable.dueDate);
+    // Collected amount per installment.
+    const payIds = pays.map((p) => p.id);
+    const collected = new Map<number, number>();
+    if (payIds.length) {
+      const cols = await this.db.select({ paymentId: paymentCollectionsTable.paymentId, amount: paymentCollectionsTable.amount })
+        .from(paymentCollectionsTable).where(inArray(paymentCollectionsTable.paymentId, payIds));
+      for (const x of cols) if (x.paymentId != null) collected.set(x.paymentId, (collected.get(x.paymentId) ?? 0) + this.num(x.amount));
+    }
+    const a = c as any;
     return {
       id: c.id, contractNumber: c.contractNumber, status: c.status,
+      // Tenant (full)
       tenantName: c.tenantName, tenantPhone: c.tenantPhone, tenantEmail: c.tenantEmail,
-      landlordName: c.landlordName, landlordPhone: c.landlordPhone,
+      tenantIdNumber: a.tenantIdNumber ?? null, tenantNationality: a.tenantNationality ?? null,
+      tenantTaxNumber: a.tenantTaxNumber ?? null, tenantAddress: a.tenantAddress ?? null,
+      // Landlord (full)
+      landlordName: c.landlordName, landlordPhone: c.landlordPhone, landlordEmail: a.landlordEmail ?? null,
+      landlordIdNumber: a.landlordIdNumber ?? null, landlordTaxNumber: a.landlordTaxNumber ?? null, landlordAddress: a.landlordAddress ?? null,
+      // Terms
       monthlyRent: this.num(c.monthlyRent), paymentFrequency: c.paymentFrequency,
-      startDate: c.startDate, endDate: c.endDate,
+      startDate: c.startDate, endDate: c.endDate, signingDate: a.signingDate ?? null, signingPlace: a.signingPlace ?? null,
       depositAmount: c.depositAmount ? this.num(c.depositAmount) : 0,
+      agencyFee: a.agencyFee ? this.num(a.agencyFee) : 0,
+      firstPaymentAmount: a.firstPaymentAmount ? this.num(a.firstPaymentAmount) : 0,
+      notes: a.notes ?? null,
+      // Contract document (PDF/image) as a signed URL.
+      attachmentUrl: await this.sign(a.attachmentKey),
       property: cu[0]?.propertyName ?? null, units: cu.map((r) => r.unitNumber).filter(Boolean),
       additionalFees: (c.additionalFees as any) ?? [],
-      payments: pays.map((p) => ({ id: p.id, amount: this.num(p.amount), dueDate: p.dueDate, paidDate: p.paidDate, status: p.status })),
+      payments: pays.map((p) => ({
+        id: p.id, amount: this.num(p.amount), dueDate: p.dueDate, paidDate: p.paidDate, status: p.status,
+        receiptNumber: p.receiptNumber, description: p.description,
+        collectedAmount: Math.round((collected.get(p.id) ?? 0) * 100) / 100,
+      })),
     };
   }
 }
