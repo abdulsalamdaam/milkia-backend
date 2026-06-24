@@ -44,12 +44,14 @@ class PackageController {
       const [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, owner.companyId));
       companyComplete = !!co && filled(co.name) && filled(co.city) && filled(co.address);
     }
-    const [defOwner] = await this.db.select().from(ownersTable)
-      .where(and(eq(ownersTable.userId, ownerId), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt)))
-      .limit(1);
-    const ownerComplete = !!defOwner && filled(defOwner.name) && filled(defOwner.buildingNumber)
-      && filled(defOwner.nationalAddressStreet) && filled(defOwner.nationalAddressDistrict)
-      && filled(defOwner.nationalAddressCity) && filled(defOwner.postalCode);
+    // Any non-deleted landlord with a complete national address satisfies the
+    // lock — not only the one flagged `is_default` (older records may not carry
+    // the flag, which would otherwise keep a fully-filled account locked).
+    const acctOwners = await this.db.select().from(ownersTable)
+      .where(and(eq(ownersTable.userId, ownerId), isNull(ownersTable.deletedAt)));
+    const ownerComplete = acctOwners.some((o) => filled(o.name) && filled(o.buildingNumber)
+      && filled(o.nationalAddressStreet) && filled(o.nationalAddressDistrict)
+      && filled(o.nationalAddressCity) && filled(o.postalCode));
     const settingsComplete = plan.mode === "tenant" ? true : (companyComplete || ownerComplete);
     const endsAt = owner?.subscriptionEndsAt ?? null;
     const daysRemaining = endsAt ? Math.ceil((new Date(endsAt).getTime() - Date.now()) / 86_400_000) : null;
