@@ -401,12 +401,17 @@ class LandlordMobileController {
       .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id)).limit(300);
     if (!rows.length) return [];
 
-    // Seller identity for the ZATCA QR (the account company, if any).
+    // Seller identity = the account company (for the QR + the document header).
     const [u] = await this.db.select({ companyId: usersTable.companyId }).from(usersTable).where(eq(usersTable.id, uid));
     let sellerName: string | null = null, sellerVat: string | null = null;
+    let seller: { name: string | null; vatNumber: string | null; phone: string | null; address: string | null } = { name: null, vatNumber: null, phone: null, address: null };
     if (u?.companyId) {
       const [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, u.companyId));
       sellerName = co?.name ?? null; sellerVat = co?.vatNumber ?? null;
+      seller = {
+        name: co?.name ?? null, vatNumber: co?.vatNumber ?? null, phone: (co as any)?.companyPhone ?? null,
+        address: co ? [(co as any).address, (co as any).district, (co as any).city].filter(Boolean).join("، ") || null : null,
+      };
     }
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
@@ -416,9 +421,13 @@ class LandlordMobileController {
       const qrSvg = !isVoucher && vat > 0.01
         ? invoiceQrSvg({ sellerName, vatNumber: sellerVat, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
         : null;
+      const buyerVat = (r.client as any)?.vatNumber ?? null;
       return {
-        id: r.id, number: r.number, type: r.type, kind: r.kind, isVoucher,
-        buyerName: r.tenantName ?? null, subtotal, total, vat, status: r.status,
+        id: r.id, number: r.number, type: r.type, kind: r.kind, isVoucher, buyerHasVat: !!buyerVat,
+        buyerName: r.tenantName ?? null,
+        seller,
+        buyer: { name: r.tenantName ?? null, vatNumber: buyerVat, phone: (r.client as any)?.phone ?? null, address: (r.client as any)?.address ?? null },
+        subtotal, total, vat, status: r.status,
         issueDate: r.issueDate, dueDate: r.dueDate, paidDate: r.paidDate,
         receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod, billingReference: r.billingReference,
         notes: r.notes, items: r.items ?? [],
