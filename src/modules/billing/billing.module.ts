@@ -199,16 +199,39 @@ class SimpleInvoicesController {
       noteMap.set(n.ref, round2((noteMap.get(n.ref) ?? 0) + signed));
     }
 
+    // Link deposit/advance vouchers to the rent invoice that covers the same
+    // installment. A voucher is collected against a payment (r.paymentId); once
+    // the first installment invoice is approved, its paymentIds cover that
+    // payment — so the Receipt Vouchers page can show the invoice number on the
+    // advance voucher (instead of "—").
+    const voucherPayIds = (rows as any[])
+      .filter((r) => (r.kind === "receipt" || r.kind === "deposit") && r.paymentId != null)
+      .map((r) => Number(r.paymentId));
+    const payToInvoice = new Map<number, string>();
+    if (voucherPayIds.length) {
+      const rentInvs = await this.db
+        .select({ number: simpleInvoicesTable.number, paymentId: simpleInvoicesTable.paymentId, paymentIds: simpleInvoicesTable.paymentIds })
+        .from(simpleInvoicesTable)
+        .where(and(base, eq(simpleInvoicesTable.type, "invoice"), isNull(simpleInvoicesTable.kind), eq(simpleInvoicesTable.status, "confirmed")));
+      for (const inv of rentInvs as any[]) {
+        const pids: number[] = Array.isArray(inv.paymentIds) && inv.paymentIds.length
+          ? inv.paymentIds.map((n: any) => Number(n))
+          : inv.paymentId != null ? [Number(inv.paymentId)] : [];
+        for (const pid of pids) if (!payToInvoice.has(pid)) payToInvoice.set(pid, inv.number);
+      }
+    }
+
     const data = (rows as any[]).map((r) => {
       const collected = round2(collMap.get(r.id) ?? 0);
       const isVoucherDoc = r.kind === "receipt" || r.kind === "deposit";
+      const linkedInvoiceNumber = isVoucherDoc && r.paymentId != null ? payToInvoice.get(Number(r.paymentId)) ?? null : null;
       const voucherAmount = isVoucherDoc
         ? round2(Number(r.total))
         : (r.receiptNumber ? round2(voucherMap.get(`${r.id}|${r.receiptNumber}`) ?? collected) : collected);
       const notesAdjustment = r.type === "invoice" ? round2(noteMap.get(r.number) ?? 0) : 0;
       const netTotal = round2(Number(r.total) + notesAdjustment);
       const balanceDue = Math.max(0, round2(netTotal - collected));
-      return { ...r, collectedAmount: collected, voucherAmount, notesAdjustment, netTotal, balanceDue };
+      return { ...r, collectedAmount: collected, voucherAmount, notesAdjustment, netTotal, balanceDue, linkedInvoiceNumber };
     });
     return { data, page: q.page, pageSize: q.pageSize, total, stats };
   }
