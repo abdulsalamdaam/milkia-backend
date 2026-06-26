@@ -154,6 +154,7 @@ export class TenantPortalController {
           propertyElevators: propertiesTable.elevators,
           propertyParkings: propertiesTable.parkings,
           propertyDeedId: propertiesTable.deedId,
+          propertyImages: propertiesTable.images,
         })
         .from(contractUnitsTable)
         .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
@@ -179,6 +180,15 @@ export class TenantPortalController {
       const deeds = await this.db.select().from(deedsTable).where(inArray(deedsTable.id, deedIds));
       for (const d of deeds) deedMap.set(d.id, { ...d, documentUrl: await this.sign(d.documentUrl) });
     }
+    // Sign the property photo gallery (first unit's property) per contract, so
+    // the tenant can preview the property's photos.
+    const propertyImagesByContract = new Map<number, string[]>();
+    for (const [cid, units] of unitsByContract) {
+      const keys = (Array.isArray(units[0]?.propertyImages) ? units[0].propertyImages : []) as any[];
+      if (!keys.length) continue;
+      const urls = (await Promise.all(keys.map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean) as string[];
+      if (urls.length) propertyImagesByContract.set(cid, urls);
+    }
     return rows.map((row) => {
       const units = unitsByContract.get(row.id) ?? [];
       const first: any = units[0] ?? null;
@@ -201,6 +211,7 @@ export class TenantPortalController {
         propertyTotalUnits: first?.propertyTotalUnits ?? null,
         propertyElevators: first?.propertyElevators ?? null,
         propertyParkings: first?.propertyParkings ?? null,
+        propertyImageUrls: propertyImagesByContract.get(row.id) ?? [],
         deed: first?.propertyDeedId ? (deedMap.get(first.propertyDeedId) ?? null) : null,
       };
     });

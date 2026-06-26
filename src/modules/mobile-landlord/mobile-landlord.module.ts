@@ -730,6 +730,7 @@ class LandlordMobileController {
       propertyTotalUnits: propertiesTable.totalUnits, propertyElevators: propertiesTable.elevators, propertyParkings: propertiesTable.parkings,
       propertyTypeLookupId: propertiesTable.typeLookupId, propertyUsageLookupId: propertiesTable.usageLookupId,
       propertyCityLookupId: propertiesTable.cityLookupId, propertyDeedId: propertiesTable.deedId,
+      propertyImageKey: propertiesTable.imageKey, propertyImages: propertiesTable.images,
     })
       .from(contractUnitsTable)
       .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
@@ -745,6 +746,13 @@ class LandlordMobileController {
     if (firstUnit?.propertyDeedId) {
       const [d] = await this.db.select().from(deedsTable).where(eq(deedsTable.id, firstUnit.propertyDeedId));
       if (d) deed = { ...d, documentUrl: await this.sign(d.documentUrl) };
+    }
+    // Signed property photo gallery (first unit's property) — for the preview.
+    const propImgKeys = (Array.isArray(firstUnit?.propertyImages) ? firstUnit.propertyImages : []) as any[];
+    let propertyImageUrls = (await Promise.all(propImgKeys.map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean) as string[];
+    if (!propertyImageUrls.length && firstUnit?.propertyImageKey) {
+      const single = await this.sign(firstUnit.propertyImageKey);
+      if (single) propertyImageUrls = [single];
     }
     const pays = await this.db.select({ id: paymentsTable.id, amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status, receiptNumber: paymentsTable.receiptNumber, description: paymentsTable.description })
       .from(paymentsTable).where(and(eq(paymentsTable.contractId, cid), isNull(paymentsTable.deletedAt)))
@@ -792,6 +800,7 @@ class LandlordMobileController {
         buildingNumber: firstUnit.propertyBuildingNumber, postalCode: firstUnit.propertyPostalCode,
       } : null,
       propertyName: firstUnit?.propertyName ?? null,
+      propertyImageUrls,
       units: cu,
       deed,
       additionalFees: (c.additionalFees as any) ?? [],
