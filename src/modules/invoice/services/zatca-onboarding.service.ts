@@ -117,6 +117,18 @@ export class ZatcaOnboardingService {
       // National (short) address: the code saved on the seller profile during onboarding.
       const nationalAddress = c?.locationAddress || null;
       const vatNumber = o.taxNumber || null;
+      // Full national address from Settings — the source of truth for ZATCA's
+      // CSR registeredAddress + the invoice XML PostalAddress.
+      const address = {
+        buildingNumber: o.buildingNumber || null,
+        street: o.nationalAddressStreet || null,
+        district: o.nationalAddressDistrict || null,
+        city: o.nationalAddressCity || null,
+        postalCode: o.postalCode || null,
+        additionalNumber: o.additionalNumber || null,
+      };
+      // Ready only when every ZATCA-mandatory address field is present.
+      const addressReady = !!(address.buildingNumber && address.street && address.district && address.city && address.postalCode);
       return {
         ownerId: o.id,
         name: o.name,
@@ -124,7 +136,8 @@ export class ZatcaOnboardingService {
         vatNumber,
         vatReady: !!vatNumber,
         nationalAddress,
-        addressReady: !!nationalAddress,
+        address,
+        addressReady,
         configured: !!c,
         activeEnvironment: c?.activeEnvironment ?? null,
         sandboxOnboarded: !!c?.sandboxCertPem,
