@@ -21,11 +21,14 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# ZATCA e-invoicing shells out to these for CSR generation, the hash transform
-# (XSLT) and C14N canonicalization. node:22-slim doesn't ship them.
+# ZATCA e-invoicing shells out to openssl/xsltproc/libxml2-utils; the invoice &
+# receipt-voucher PDF export renders HTML with headless Chromium (+ Arabic and
+# Latin fonts). node:22-slim doesn't ship any of these.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       openssl xsltproc libxml2-utils \
+      chromium fonts-liberation fonts-noto-core fonts-kacst \
     && rm -rf /var/lib/apt/lists/*
+ENV CHROME_PATH=/usr/bin/chromium
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist

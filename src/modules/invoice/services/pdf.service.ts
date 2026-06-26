@@ -47,17 +47,22 @@ export class PdfService {
   }
 
   async renderPdf(ctx: RenderContext): Promise<Buffer> {
+    return this.htmlToPdf(renderInvoiceHtml(ctx));
+  }
+
+  /** Render an arbitrary HTML string to a PDF (used by the invoice/voucher
+   *  exporter so the file matches the web's printed document exactly). */
+  async htmlToPdf(html: string): Promise<Buffer> {
     const chrome = await this.findChrome();
     if (!chrome) {
       throw new Error(
         "No headless browser found. Install Google Chrome / Chromium / Edge to enable PDF export, or set CHROME_PATH env var.",
       );
     }
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "zatca-pdf-"));
-    const htmlPath = path.join(tmp, "invoice.html");
-    const pdfPath = path.join(tmp, "invoice.pdf");
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "doc-pdf-"));
+    const htmlPath = path.join(tmp, "doc.html");
+    const pdfPath = path.join(tmp, "doc.pdf");
     try {
-      const html = renderInvoiceHtml(ctx);
       await fs.writeFile(htmlPath, html, "utf8");
       await this.shell.mustRun(chrome, [
         "--headless=new",
