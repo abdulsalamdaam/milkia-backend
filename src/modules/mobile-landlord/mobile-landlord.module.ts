@@ -709,11 +709,37 @@ class LandlordMobileController {
     const [c] = await this.db.select().from(contractsTable)
       .where(and(eq(contractsTable.id, cid), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
     if (!c) throw new NotFoundException("Contract not found");
-    const cu = await this.db.select({ unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
+    const cu: any[] = await this.db.select({
+      unitId: unitsTable.id, unitNumber: unitsTable.unitNumber, unitStatus: unitsTable.status,
+      unitFloor: unitsTable.floor, unitArea: unitsTable.area,
+      unitBedrooms: unitsTable.bedrooms, unitBathrooms: unitsTable.bathrooms,
+      unitLivingRooms: unitsTable.livingRooms, unitHalls: unitsTable.halls,
+      unitParkingSpaces: unitsTable.parkingSpaces, unitRentPrice: unitsTable.rentPrice,
+      unitAcUnits: unitsTable.acUnits, unitAcType: unitsTable.acType,
+      unitElectricityMeter: unitsTable.electricityMeter, unitWaterMeter: unitsTable.waterMeter, unitGasMeter: unitsTable.gasMeter,
+      propertyId: propertiesTable.id, propertyName: propertiesTable.name,
+      propertyDistrict: propertiesTable.district, propertyStreet: propertiesTable.street,
+      propertyBuildingNumber: propertiesTable.buildingNumber, propertyPostalCode: propertiesTable.postalCode,
+      propertyBuildingType: propertiesTable.buildingType, propertyFloors: propertiesTable.floors,
+      propertyTotalUnits: propertiesTable.totalUnits, propertyElevators: propertiesTable.elevators, propertyParkings: propertiesTable.parkings,
+      propertyTypeLookupId: propertiesTable.typeLookupId, propertyUsageLookupId: propertiesTable.usageLookupId,
+      propertyCityLookupId: propertiesTable.cityLookupId, propertyDeedId: propertiesTable.deedId,
+    })
       .from(contractUnitsTable)
       .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
       .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
       .where(eq(contractUnitsTable.contractId, cid));
+    await attachLookupLabels(this.db, cu, [
+      { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
+      { idField: "propertyUsageLookupId", out: "propertyUsage", mode: "labelAr" },
+      { idField: "propertyCityLookupId", out: "propertyCity", mode: "labelAr" },
+    ]);
+    const firstUnit: any = cu[0] ?? null;
+    let deed: any = null;
+    if (firstUnit?.propertyDeedId) {
+      const [d] = await this.db.select().from(deedsTable).where(eq(deedsTable.id, firstUnit.propertyDeedId));
+      if (d) deed = { ...d, documentUrl: await this.sign(d.documentUrl) };
+    }
     const pays = await this.db.select({ id: paymentsTable.id, amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status, receiptNumber: paymentsTable.receiptNumber, description: paymentsTable.description })
       .from(paymentsTable).where(and(eq(paymentsTable.contractId, cid), isNull(paymentsTable.deletedAt)))
       .orderBy(paymentsTable.dueDate);
@@ -729,6 +755,7 @@ class LandlordMobileController {
     return {
       id: c.id, contractNumber: c.contractNumber, status: c.status,
       // Tenant (full)
+      tenantType: a.tenantType ?? null,
       tenantName: c.tenantName, tenantPhone: c.tenantPhone, tenantEmail: c.tenantEmail,
       tenantIdNumber: a.tenantIdNumber ?? null,
       tenantTaxNumber: a.tenantTaxNumber ?? null, tenantAddress: a.tenantAddress ?? null,
@@ -739,12 +766,25 @@ class LandlordMobileController {
       monthlyRent: this.num(c.monthlyRent), paymentFrequency: c.paymentFrequency,
       startDate: c.startDate, endDate: c.endDate, signingDate: a.signingDate ?? null, signingPlace: a.signingPlace ?? null,
       depositAmount: c.depositAmount ? this.num(c.depositAmount) : 0,
+      depositStatus: a.depositStatus ?? null, depositDueDate: a.depositDueDate ?? null,
       agencyFee: a.agencyFee ? this.num(a.agencyFee) : 0,
       firstPaymentAmount: a.firstPaymentAmount ? this.num(a.firstPaymentAmount) : 0,
+      vatEnabled: !!a.vatEnabled,
+      escalationType: a.escalationType ?? null, escalationRate: a.escalationRate ? this.num(a.escalationRate) : 0,
       notes: a.notes ?? null,
       // Contract document (PDF/image) as a signed URL.
       attachmentUrl: await this.sign(a.attachmentKey),
-      property: cu[0]?.propertyName ?? null, units: cu.map((r) => r.unitNumber).filter(Boolean),
+      // Full property + units + deed so the detail screen mirrors the web.
+      property: firstUnit ? {
+        id: firstUnit.propertyId, name: firstUnit.propertyName, type: firstUnit.propertyType, usage: firstUnit.propertyUsage,
+        buildingType: firstUnit.propertyBuildingType, floors: firstUnit.propertyFloors, totalUnits: firstUnit.propertyTotalUnits,
+        elevators: firstUnit.propertyElevators, parkings: firstUnit.propertyParkings,
+        city: firstUnit.propertyCity, district: firstUnit.propertyDistrict, street: firstUnit.propertyStreet,
+        buildingNumber: firstUnit.propertyBuildingNumber, postalCode: firstUnit.propertyPostalCode,
+      } : null,
+      propertyName: firstUnit?.propertyName ?? null,
+      units: cu,
+      deed,
       additionalFees: (c.additionalFees as any) ?? [],
       payments: pays.map((p) => ({
         id: p.id, amount: this.num(p.amount), dueDate: p.dueDate, paidDate: p.paidDate, status: p.status,
