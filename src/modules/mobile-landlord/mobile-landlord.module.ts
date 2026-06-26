@@ -636,7 +636,7 @@ class LandlordMobileController {
     const uid = scopeId(user);
     const unitId = parseInt(id, 10);
     const [row] = await this.db
-      .select({ unit: unitsTable, propertyName: propertiesTable.name, propertyId: propertiesTable.id })
+      .select({ unit: unitsTable, propertyName: propertiesTable.name, propertyId: propertiesTable.id, propertyUsageLookupId: propertiesTable.usageLookupId })
       .from(unitsTable).innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
       .where(and(eq(unitsTable.id, unitId), eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt)));
     if (!row) throw new NotFoundException("Unit not found");
@@ -679,13 +679,18 @@ class LandlordMobileController {
         .map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean),
       documents,
       property: row.propertyName, propertyId: row.propertyId,
+      // Usage is a property-level attribute — surface the parent property's usage.
+      propertyUsageLookupId: row.propertyUsageLookupId,
       currentContract: cu ? { ...cu, monthlyRent: this.num(cu.monthlyRent) } : null,
       contracts: allContracts.map((c) => ({ ...c, monthlyRent: this.num(c.monthlyRent) })),
       finance,
     };
+    // Rent: the unit's own listed rent, falling back to its active contract.
+    if (result.rentPrice == null && cu) result.rentPrice = this.num(cu.monthlyRent);
     await attachLookupLabels(this.db, [result], [
       { idField: "typeLookupId", out: "type", mode: "labelAr" },
       { idField: "finishingLookupId", out: "finishing", mode: "labelAr" },
+      { idField: "propertyUsageLookupId", out: "usage", mode: "labelAr" },
     ]);
     return result;
   }
