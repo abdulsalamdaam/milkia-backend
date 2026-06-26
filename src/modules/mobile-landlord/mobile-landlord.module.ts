@@ -446,6 +446,18 @@ class LandlordMobileController {
         address: co ? [(co as any).address, (co as any).district, (co as any).city].filter(Boolean).join("، ") || null : null,
       };
     }
+    // Individual account (no company) → seller identity is the default landlord owner.
+    if (!seller.name) {
+      const [owner] = await this.db.select().from(ownersTable)
+        .where(and(eq(ownersTable.userId, uid), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt))).limit(1);
+      if (owner) {
+        sellerName = sellerName ?? owner.name; sellerVat = sellerVat ?? (owner as any).taxNumber ?? null;
+        seller = {
+          name: owner.name ?? null, vatNumber: (owner as any).taxNumber ?? null,
+          phone: (owner as any).phone ?? null, address: (owner as any).address ?? null,
+        };
+      }
+    }
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
     return Promise.all(rows.map(async (r) => {

@@ -7,9 +7,9 @@ import { notifyTenant } from "../../common/notify";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
 const MAINTENANCE_STATUS_AR: Record<string, string> = {
-  open: "مفتوح",
+  open: "جديد",
   in_progress: "قيد التنفيذ",
-  pending_approval: "بانتظار الموافقة",
+  pending_approval: "قيد التنفيذ",
   completed: "مكتمل",
 };
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
