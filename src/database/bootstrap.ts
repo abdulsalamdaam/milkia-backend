@@ -95,6 +95,14 @@ export async function ensureSchema(): Promise<void> {
       }
     }
 
+    // Additive columns that must run regardless of whether the db/sql migration
+    // files were copied into the image — idempotent, applied on every boot.
+    try {
+      await client.query(`alter table simple_invoices add column if not exists pdf_key text`);
+    } catch (err: any) {
+      log.warn(`ensure simple_invoices.pdf_key failed: ${err?.message || err}`);
+    }
+
     // Phase 1.6: refresh system role permissions on every boot. Keeps the
     // roles table in sync with code-side ROLE_PRESETS + EMPLOYEE_PRESETS
     // without requiring a hand-written migration each time we add a

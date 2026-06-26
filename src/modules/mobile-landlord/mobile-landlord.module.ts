@@ -495,6 +495,14 @@ class LandlordMobileController {
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
     const subtotal = this.num(r.subtotal), total = this.num(r.total), vat = round2(total - subtotal);
     const isVoucher = r.kind === "receipt" || r.kind === "deposit";
+    const wantVoucher = isVoucher || voucher === "1";
+    // The canonical rendering (voucher for kind=receipt, invoice otherwise) is
+    // cached on the row; a collected-invoice-as-voucher variant is regenerated.
+    const isPrimary = wantVoucher === isVoucher;
+    if (isPrimary && (r as any).pdfKey) {
+      const cached = await this.sign((r as any).pdfKey);
+      if (cached) return { url: cached, pdfKey: (r as any).pdfKey };
+    }
     const buyerVat = (r.client as any)?.vatNumber ?? null;
     const qrSvg = !isVoucher && vat > 0.01
       ? invoiceQrSvg({ sellerName, vatNumber: sellerVat, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
@@ -509,12 +517,14 @@ class LandlordMobileController {
       qrSvg,
     }, ar, voucher === "1");
     const pdf = await this.pdf.htmlToPdf(html);
-    const fileName = ((isVoucher || voucher === "1") ? (r.receiptNumber || r.number) : r.number) || "document";
+    const fileName = (wantVoucher ? (r.receiptNumber || r.number) : r.number) || "document";
     const { key } = await this.uploads.upload(
       { buffer: pdf, originalname: `${fileName}.pdf`, mimetype: "application/pdf", size: pdf.length },
       { folder: `invoice-pdf/${uid}` },
     );
-    return { url: await this.sign(key) };
+    // Persist the cached key on the row so it's findable + reused next time.
+    if (isPrimary) await this.db.update(simpleInvoicesTable).set({ pdfKey: key } as any).where(eq(simpleInvoicesTable.id, r.id));
+    return { url: await this.sign(key), pdfKey: key };
   }
 
   /** Reports: headline stats, a 6-month collected-vs-expected series, and

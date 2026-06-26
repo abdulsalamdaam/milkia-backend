@@ -41,6 +41,9 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   paymentMethod: text("payment_method"),
   // Collection evidence (receipt/photo) attached when the invoice is confirmed.
   attachmentKey: text("attachment_key"),
+  // Rendered PDF of the document (MinIO key) — generated on first download so
+  // the file is cached/persisted rather than regenerated every time.
+  pdfKey: text("pdf_key"),
   // Receipt-voucher number, stamped when an invoice is confirmed.
   receiptNumber: text("receipt_number"),
   // For credit/debit notes — the original invoice number being adjusted.
