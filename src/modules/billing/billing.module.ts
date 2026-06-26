@@ -198,6 +198,22 @@ class SimpleInvoicesController {
       const signed = (n.type === "credit" ? -1 : 1) * Number(n.total ?? 0);
       noteMap.set(n.ref, round2((noteMap.get(n.ref) ?? 0) + signed));
     }
+    // The note NUMBERS per invoice — for the plain "this invoice has note X" line
+    // shown at the bottom of the invoice document (the modal renders this list
+    // row, so relatedNotes must be attached here, not only on the single GET).
+    const noteRows = invNumbers.length
+      ? await this.db.select({ number: simpleInvoicesTable.number, ref: simpleInvoicesTable.billingReference, type: simpleInvoicesTable.type })
+          .from(simpleInvoicesTable)
+          .where(and(base, inArray(simpleInvoicesTable.type, ["credit", "debit"] as any),
+            eq(simpleInvoicesTable.status, "confirmed"), inArray(simpleInvoicesTable.billingReference, invNumbers)))
+      : [];
+    const notesByInvoice = new Map<string, { number: string; type: string }[]>();
+    for (const n of noteRows as Array<{ number: string; ref: string | null; type: string }>) {
+      if (!n.ref) continue;
+      const arr = notesByInvoice.get(n.ref) ?? [];
+      arr.push({ number: n.number, type: n.type });
+      notesByInvoice.set(n.ref, arr);
+    }
 
     // Link deposit/advance vouchers to the rent invoice that covers the same
     // installment. A voucher is collected against a payment (r.paymentId); once
@@ -231,7 +247,8 @@ class SimpleInvoicesController {
       const notesAdjustment = r.type === "invoice" ? round2(noteMap.get(r.number) ?? 0) : 0;
       const netTotal = round2(Number(r.total) + notesAdjustment);
       const balanceDue = Math.max(0, round2(netTotal - collected));
-      return { ...r, collectedAmount: collected, voucherAmount, notesAdjustment, netTotal, balanceDue, linkedInvoiceNumber };
+      const relatedNotes = r.type === "invoice" ? notesByInvoice.get(r.number) ?? [] : [];
+      return { ...r, collectedAmount: collected, voucherAmount, notesAdjustment, netTotal, balanceDue, linkedInvoiceNumber, relatedNotes };
     });
     return { data, page: q.page, pageSize: q.pageSize, total, stats };
   }
