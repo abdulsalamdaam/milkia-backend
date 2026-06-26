@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, Inject, Module, NotFoundException, Param, Patch, Post, Query, BadRequestException, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, ne, isNull, or, ilike, count, asc, desc } from "drizzle-orm";
-import { ownersTable, contractsTable } from "@oqudk/database";
+import { ownersTable, contractsTable, ownerNotificationsTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -12,6 +12,20 @@ import { assertNationalAddress } from "../../common/national-address";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
+import { EmailService } from "../email/email.service";
+import { sendExpoPush } from "../../common/push";
+import { IsInt, IsString, IsNotEmpty, IsOptional } from "class-validator";
+import { Type } from "class-transformer";
+
+/** An owner's effective contact applies the representative (وكيل) precedence:
+ *  when isRepresentative is true the original-owner fields hold the real
+ *  contact, so messaging must use those. */
+function effectiveOwnerContact(o: { isRepresentative: boolean; email: string | null; phone: string | null; originalOwnerEmail: string | null; originalOwnerPhone: string | null; }) {
+  return {
+    email: o.isRepresentative ? o.originalOwnerEmail : o.email,
+    phone: o.isRepresentative ? o.originalOwnerPhone : o.phone,
+  };
+}
 
 const FIELDS = [
   "name", "shortName", "type", "status", "idNumber", "phone", "email", "iban",
@@ -33,7 +47,10 @@ const FIELDS = [
 @Controller("owners")
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 class OwnersController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+  constructor(
+    @Inject(DRIZZLE) private readonly db: Drizzle,
+    private readonly email: EmailService,
+  ) {}
 
   @Get()
   @RequirePermissions(PERMISSIONS.OWNERS_VIEW)
@@ -114,6 +131,21 @@ class OwnersController {
     return owner;
   }
 
+  /** Email the landlord a nudge to download the mobile app. Uses the
+   *  representative-aware effective email. */
+  @Post(":id/app-reminder")
+  @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
+  async appReminder(@CurrentUser() user: AuthUser, @Param("id") id: string) {
+    const oid = parseInt(id, 10);
+    const [owner] = await this.db.select().from(ownersTable)
+      .where(and(eq(ownersTable.id, oid), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
+    if (!owner) throw new NotFoundException("غير موجود");
+    const { email } = effectiveOwnerContact(owner);
+    if (!email) throw new BadRequestException("لا يوجد بريد إلكتروني لهذا المؤجر · This landlord has no email on file");
+    const sent = await this.email.sendAppDownloadReminder(email, owner.name);
+    return { sent };
+  }
+
   @Patch(":ownerId")
   @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
   async update(@CurrentUser() user: AuthUser, @Param("ownerId") ownerId: string, @Body() body: any) {
@@ -163,5 +195,101 @@ class OwnersController {
   }
 }
 
-@Module({ controllers: [OwnersController] })
+/* ─────────────── Send a notification to one of the account's landlords ─────────────── */
+
+class SendOwnerNotificationDto {
+  // Global ValidationPipe has whitelist:true — every field must be decorated
+  // or it gets stripped.
+  @Type(() => Number)
+  @IsInt()
+  ownerId!: number;
+
+  @IsString()
+  @IsNotEmpty()
+  title!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  body!: string;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+}
+
+@ApiTags("owner-notifications")
+@ApiBearerAuth("user-jwt")
+@Controller("owner-notifications")
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+class OwnerNotificationsController {
+  constructor(@Inject(DRIZZLE) private readonly db: Drizzle) {}
+
+  /** Notifications the account has sent to its landlords (newest first). */
+  @Get()
+  @RequirePermissions(PERMISSIONS.OWNERS_VIEW)
+  async list(@CurrentUser() user: AuthUser) {
+    return this.db
+      .select({
+        id: ownerNotificationsTable.id,
+        ownerId: ownerNotificationsTable.ownerId,
+        title: ownerNotificationsTable.title,
+        body: ownerNotificationsTable.body,
+        type: ownerNotificationsTable.type,
+        readAt: ownerNotificationsTable.readAt,
+        createdAt: ownerNotificationsTable.createdAt,
+        ownerName: ownersTable.name,
+      })
+      .from(ownerNotificationsTable)
+      .leftJoin(ownersTable, eq(ownerNotificationsTable.ownerId, ownersTable.id))
+      .where(and(
+        eq(ownerNotificationsTable.userId, scopeId(user)),
+        isNull(ownerNotificationsTable.deletedAt),
+      ))
+      .orderBy(desc(ownerNotificationsTable.createdAt));
+  }
+
+  /** Send a notification to one of the account's landlords. */
+  @Post()
+  @RequirePermissions(PERMISSIONS.OWNERS_WRITE)
+  async send(@CurrentUser() user: AuthUser, @Body() body: SendOwnerNotificationDto) {
+    const ownerId = Number(body?.ownerId);
+    const title = body?.title?.toString().trim();
+    const text = body?.body?.toString().trim();
+    if (!ownerId || !title || !text) {
+      throw new BadRequestException("المؤجر والعنوان والنص مطلوبة");
+    }
+
+    // The owner must belong to this account's scope.
+    const [owner] = await this.db
+      .select({ id: ownersTable.id, fcmToken: ownersTable.fcmToken })
+      .from(ownersTable)
+      .where(and(
+        eq(ownersTable.id, ownerId),
+        eq(ownersTable.userId, scopeId(user)),
+        isNull(ownersTable.deletedAt),
+      ));
+    if (!owner) throw new NotFoundException("المؤجر غير موجود");
+
+    const [row] = await this.db.insert(ownerNotificationsTable).values({
+      userId: scopeId(user),
+      ownerId,
+      title,
+      body: text,
+      type: body?.type?.toString().trim() || "custom",
+    }).returning();
+
+    // Deliver an actual push to the landlord's device (fire-and-forget).
+    if (owner.fcmToken) {
+      void sendExpoPush([{
+        to: owner.fcmToken,
+        title,
+        body: text,
+        data: { type: row!.type, notificationId: row!.id },
+      }]);
+    }
+    return { ...row, pushed: !!owner.fcmToken };
+  }
+}
+
+@Module({ controllers: [OwnersController, OwnerNotificationsController] })
 export class OwnersModule {}

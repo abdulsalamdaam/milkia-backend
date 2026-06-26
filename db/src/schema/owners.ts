@@ -56,6 +56,9 @@ export const ownersTable = pgTable("owners", {
   isDefault: boolean("is_default").notNull().default(false),
   // Lookups-FK refactor (phase 3) — backfilled from the `nationality` text.
   nationalityLookupId: integer("nationality_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  // Expo push token for the owner's mobile (landlord) app — mirrors tenants.ts.
+  fcmToken: text("fcm_token"),
+  fcmPlatform: text("fcm_platform"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),

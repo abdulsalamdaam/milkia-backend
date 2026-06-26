@@ -1,5 +1,6 @@
-import { Controller, Get, Inject, Module, NotFoundException, Param, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, Inject, Module, NotFoundException, Param, Post, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
+import { IsIn, IsOptional, IsString } from "class-validator";
 import { and, eq, isNull, inArray, desc, sql } from "drizzle-orm";
 import {
   usersTable, ownersTable, propertiesTable, unitsTable, contractsTable, contractUnitsTable,
@@ -14,6 +15,15 @@ import { scopeId } from "../../common/scope";
 import { attachLookupLabels } from "../../common/lookups-resolve";
 import { invoiceQrSvg } from "../../common/zatca-qr";
 import { UploadsService } from "../uploads/uploads.service";
+
+class FcmTokenDto {
+  @IsString()
+  token!: string;
+
+  @IsOptional()
+  @IsIn(["ios", "android", "web"])
+  platform?: "ios" | "android" | "web";
+}
 
 /**
  * Landlord mobile API — READ ONLY. Mirrors the tenant-portal shape but for a
@@ -79,6 +89,35 @@ class LandlordMobileController {
     const owners = await this.db.select({ id: ownersTable.id }).from(ownersTable)
       .where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)));
     return { ...u, landlordsCount: owners.length, isEmployee: user.ownerUserId != null };
+  }
+
+  /** Save the device's Expo push token. Only owner (landlord) logins receive
+   *  notifications, so the token is stored on the owner row identified by
+   *  ownerScopeId; non-owner (user/employee) logins no-op. */
+  @Post("fcm-token")
+  @HttpCode(200)
+  async saveFcmToken(@CurrentUser() user: AuthUser, @Body() body: FcmTokenDto) {
+    const token = body.token?.trim();
+    if (!token) return { success: false };
+    if (user.ownerScopeId != null) {
+      await this.db.update(ownersTable)
+        .set({ fcmToken: token, fcmPlatform: body.platform ?? null })
+        .where(eq(ownersTable.id, user.ownerScopeId));
+      return { success: true };
+    }
+    return { success: false };
+  }
+
+  /** Clear the device's push token on logout. */
+  @Delete("fcm-token")
+  @HttpCode(200)
+  async clearFcmToken(@CurrentUser() user: AuthUser) {
+    if (user.ownerScopeId != null) {
+      await this.db.update(ownersTable)
+        .set({ fcmToken: null, fcmPlatform: null })
+        .where(eq(ownersTable.id, user.ownerScopeId));
+    }
+    return { success: true };
   }
 
   /** KPI summary for the landlord home screen. */

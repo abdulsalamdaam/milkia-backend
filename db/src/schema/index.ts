@@ -13,6 +13,7 @@ export * from "./payments";
 export * from "./paymentCollections";
 export * from "./paymentConfirmations";
 export * from "./notifications";
+export * from "./ownerNotifications";
 export * from "./maintenance";
 export * from "./support";
 export * from "./owners";

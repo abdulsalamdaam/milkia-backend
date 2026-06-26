@@ -103,6 +103,33 @@ export async function ensureSchema(): Promise<void> {
       log.warn(`ensure simple_invoices.pdf_key failed: ${err?.message || err}`);
     }
 
+    // Owner (landlord) push token columns — mirrors the tenants.fcm_* columns.
+    try {
+      await client.query(`alter table owners add column if not exists fcm_token text`);
+      await client.query(`alter table owners add column if not exists fcm_platform text`);
+    } catch (err: any) {
+      log.warn(`ensure owners.fcm_token/fcm_platform failed: ${err?.message || err}`);
+    }
+
+    // Owner notifications inbox — mirrors the notifications table but targets an owner.
+    try {
+      await client.query(`
+        create table if not exists owner_notifications (
+          id serial primary key,
+          user_id integer not null,
+          owner_id integer not null,
+          title text not null,
+          body text not null,
+          type text not null default 'custom',
+          read_at timestamptz,
+          deleted_at timestamptz,
+          created_at timestamptz not null default now()
+        )
+      `);
+    } catch (err: any) {
+      log.warn(`ensure owner_notifications table failed: ${err?.message || err}`);
+    }
+
     // Phase 1.6: refresh system role permissions on every boot. Keeps the
     // roles table in sync with code-side ROLE_PRESETS + EMPLOYEE_PRESETS
     // without requiring a hand-written migration each time we add a
