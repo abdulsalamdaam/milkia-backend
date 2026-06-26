@@ -796,6 +796,8 @@ class LandlordMobileController {
     const a = c as any;
     return {
       id: c.id, contractNumber: c.contractNumber, status: c.status,
+      // Linked tenant id — lets the app deep-link to the tenant screen.
+      tenantId: a.tenantId ?? null,
       // Tenant (full)
       tenantType: a.tenantType ?? null,
       tenantName: c.tenantName, tenantPhone: c.tenantPhone, tenantEmail: c.tenantEmail,
