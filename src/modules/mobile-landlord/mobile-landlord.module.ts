@@ -50,9 +50,12 @@ class LandlordMobileController {
   @Get("summary")
   async summary(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
-    const props = await this.db.select({ id: propertiesTable.id }).from(propertiesTable)
+    const props = await this.db.select({ id: propertiesTable.id, totalUnits: propertiesTable.totalUnits }).from(propertiesTable)
       .where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
     const propIds = props.map((p) => p.id);
+    // Occupancy denominator is the property's declared total units (sum), not
+    // the count of created unit records.
+    const totalUnits = props.reduce((s, p) => s + (Number(p.totalUnits) || 0), 0);
 
     let unitsCount = 0, rentedUnits = 0, availableUnits = 0, maintenanceUnits = 0;
     if (propIds.length) {
@@ -84,11 +87,12 @@ class LandlordMobileController {
       .where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))).length;
     void tenantsRow;
 
+    const occDenom = totalUnits > 0 ? totalUnits : unitsCount;
     return {
-      propertiesCount: propIds.length, unitsCount, rentedUnits, availableUnits, maintenanceUnits,
+      propertiesCount: propIds.length, unitsCount, totalUnits, rentedUnits, availableUnits, maintenanceUnits,
       activeContractsCount, tenantsCount,
       monthlyRecurring, collectedTotal, monthlyRevenue, pendingDue, overduePaymentsCount,
-      occupancyRate: unitsCount > 0 ? Math.round((rentedUnits / unitsCount) * 100) : 0,
+      occupancyRate: occDenom > 0 ? Math.min(100, Math.round((rentedUnits / occDenom) * 100)) : 0,
     };
   }
 
@@ -147,12 +151,19 @@ class LandlordMobileController {
     const rows = props.map((p) => {
       const us = units.filter((u) => u.propertyId === p.id);
       const rented = us.filter((u) => u.status === "rented").length;
+      // Occupancy is rented ÷ the property's declared total units (fall back to
+      // the created-unit count only when totalUnits isn't set).
+      const totalUnits = Number((p as any).totalUnits) || 0;
+      const denom = totalUnits > 0 ? totalUnits : us.length;
+      const imgs = (p as any).images;
+      const imgKey = (Array.isArray(imgs) && imgs.length ? imgs[0] : null) ?? (p as any).imageKey ?? null;
       return {
         id: p.id, name: p.name, status: (p as any).status ?? null,
         district: (p as any).district ?? null, street: (p as any).street ?? null, deedNumber: (p as any).deedNumber ?? null,
         typeLookupId: (p as any).typeLookupId ?? null, usageLookupId: (p as any).usageLookupId ?? null, cityLookupId: (p as any).cityLookupId ?? null,
-        unitsCount: us.length, rentedUnits: rented,
-        occupancyRate: us.length ? Math.round((rented / us.length) * 100) : 0,
+        unitsCount: us.length, totalUnits, rentedUnits: rented,
+        occupancyRate: denom > 0 ? Math.min(100, Math.round((rented / denom) * 100)) : 0,
+        _imgKey: imgKey,
       };
     });
     await attachLookupLabels(this.db, rows as any[], [
@@ -160,6 +171,11 @@ class LandlordMobileController {
       { idField: "usageLookupId", out: "usage", mode: "key" },     // filter key: residential/commercial/mixed
       { idField: "cityLookupId", out: "city", mode: "labelAr" },
     ]);
+    // Sign each property's cover image (first gallery photo) for the card.
+    await Promise.all((rows as any[]).map(async (r) => {
+      r.imageUrl = await this.sign(typeof r._imgKey === "string" ? r._imgKey : r._imgKey?.key);
+      delete r._imgKey;
+    }));
     return rows;
   }
 
@@ -444,7 +460,7 @@ class LandlordMobileController {
   @Get("reports")
   async reports(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
-    const props = await this.db.select({ id: propertiesTable.id, name: propertiesTable.name })
+    const props = await this.db.select({ id: propertiesTable.id, name: propertiesTable.name, totalUnits: propertiesTable.totalUnits })
       .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
     const propIds = props.map((p) => p.id);
     const units = propIds.length
@@ -492,7 +508,8 @@ class LandlordMobileController {
     }
     const propertyPerformance = props.map((p) => {
       const us = units.filter((u) => u.propertyId === p.id);
-      const occ = us.length ? Math.round((us.filter((u) => u.status === "rented").length / us.length) * 100) : 0;
+      const denom = Number((p as any).totalUnits) || us.length;
+      const occ = denom > 0 ? Math.min(100, Math.round((us.filter((u) => u.status === "rented").length / denom) * 100)) : 0;
       return { name: p.name, collected: Math.round(collectedByProp.get(p.id) ?? 0), occupancy: occ };
     }).sort((a, b) => b.collected - a.collected).slice(0, 8);
 
@@ -592,7 +609,11 @@ class LandlordMobileController {
       imageUrls: (await Promise.all((Array.isArray((p as any).images) ? (p as any).images : [])
         .map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean),
       deed,
-      occupancyRate: units.length ? Math.round((units.filter((u) => u.status === "rented").length / units.length) * 100) : 0,
+      occupancyRate: (() => {
+        const rented = units.filter((u) => u.status === "rented").length;
+        const denom = Number((p as any).totalUnits) || units.length;
+        return denom > 0 ? Math.min(100, Math.round((rented / denom) * 100)) : 0;
+      })(),
       rentedUnits: units.filter((u) => u.status === "rented").length,
       availableUnits: units.filter((u) => u.status === "available").length,
       units: units.map((u) => ({ ...u, rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null })),
