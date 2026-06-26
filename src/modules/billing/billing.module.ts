@@ -236,7 +236,18 @@ class SimpleInvoicesController {
     }
     const netTotal = round2(Number(doc.total) + notesAdjustment);
     const balanceDue = Math.max(0, round2(netTotal - collected));
-    return { ...doc, collectedAmount: collected, notesAdjustment, netTotal, balanceDue };
+    // Numbers of the confirmed credit/debit notes referencing this invoice — a
+    // plain "this invoice has note X" hint (no amount) shown on the invoice.
+    let relatedNotes: { number: string; type: string }[] = [];
+    if (doc.type === "invoice") {
+      relatedNotes = await this.db.select({ number: simpleInvoicesTable.number, type: simpleInvoicesTable.type })
+        .from(simpleInvoicesTable)
+        .where(and(eq(simpleInvoicesTable.userId, uid),
+          inArray(simpleInvoicesTable.type, ["credit", "debit"]),
+          eq(simpleInvoicesTable.billingReference, doc.number),
+          eq(simpleInvoicesTable.status, "confirmed"), isNull(simpleInvoicesTable.deletedAt)));
+    }
+    return { ...doc, collectedAmount: collected, notesAdjustment, netTotal, balanceDue, relatedNotes };
   }
 
   @Post()
