@@ -85,11 +85,25 @@ export class TenantPortalController {
         depositAmount: contractsTable.depositAmount,
         status: contractsTable.status,
         notes: contractsTable.notes,
+        vatEnabled: contractsTable.vatEnabled,
+        // Tenant identity (snapshot) — so the tenant sees their own record too.
+        tenantType: contractsTable.tenantType,
+        tenantName: contractsTable.tenantName,
+        tenantIdNumber: contractsTable.tenantIdNumber,
+        tenantPhone: contractsTable.tenantPhone,
+        tenantEmail: contractsTable.tenantEmail,
+        tenantTaxNumber: contractsTable.tenantTaxNumber,
+        // Landlord identity (full).
         landlordName: contractsTable.landlordName,
+        landlordIdNumber: contractsTable.landlordIdNumber,
         landlordPhone: contractsTable.landlordPhone,
         landlordEmail: contractsTable.landlordEmail,
+        landlordTaxNumber: contractsTable.landlordTaxNumber,
+        landlordAddress: contractsTable.landlordAddress,
         signingDate: contractsTable.signingDate,
+        signingPlace: contractsTable.signingPlace,
         agencyFee: contractsTable.agencyFee,
+        firstPaymentAmount: contractsTable.firstPaymentAmount,
         additionalFees: contractsTable.additionalFees,
       })
       .from(contractsTable)
@@ -128,6 +142,12 @@ export class TenantPortalController {
           propertyBuildingNumber: propertiesTable.buildingNumber,
           propertyPostalCode: propertiesTable.postalCode,
           propertyTypeLookupId: propertiesTable.typeLookupId,
+          propertyBuildingType: propertiesTable.buildingType,
+          propertyUsageLookupId: propertiesTable.usageLookupId,
+          propertyFloors: propertiesTable.floors,
+          propertyTotalUnits: propertiesTable.totalUnits,
+          propertyElevators: propertiesTable.elevators,
+          propertyParkings: propertiesTable.parkings,
           propertyDeedId: propertiesTable.deedId,
         })
         .from(contractUnitsTable)
@@ -138,6 +158,7 @@ export class TenantPortalController {
       await attachLookupLabels(this.db, unitRows as any[], [
         { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
         { idField: "propertyCityLookupId", out: "propertyCity", mode: "labelAr" },
+        { idField: "propertyUsageLookupId", out: "propertyUsage", mode: "labelAr" },
       ]);
       for (const u of unitRows) {
         const list = unitsByContract.get(u.contractId) ?? [];
@@ -169,6 +190,12 @@ export class TenantPortalController {
         propertyBuildingNumber: first?.propertyBuildingNumber ?? null,
         propertyPostalCode: first?.propertyPostalCode ?? null,
         propertyType: first?.propertyType ?? null,
+        propertyBuildingType: first?.propertyBuildingType ?? null,
+        propertyUsage: first?.propertyUsage ?? null,
+        propertyFloors: first?.propertyFloors ?? null,
+        propertyTotalUnits: first?.propertyTotalUnits ?? null,
+        propertyElevators: first?.propertyElevators ?? null,
+        propertyParkings: first?.propertyParkings ?? null,
         deed: first?.propertyDeedId ? (deedMap.get(first.propertyDeedId) ?? null) : null,
       };
     });
