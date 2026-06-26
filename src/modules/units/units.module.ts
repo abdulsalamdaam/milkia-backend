@@ -30,8 +30,8 @@ function overlayUnitTypeOther<T extends { type?: unknown; typeOther?: unknown }>
 const UNIT_FIELDS = [
   "unitNumber", "status", "floor", "area", "bedrooms", "bathrooms",
   "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
-  "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing",
-  "kitchenType", "amenities", "amenitiesData", "yearBuilt",
+  "waterMeter", "gasMeter", "acUnits", "acType", "parkingType",
+  "amenities", "amenitiesData",
   "facadeLength", "unitLength", "unitWidth", "unitHeight",
   "hasMezzanine", "notes",
   // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
@@ -88,11 +88,8 @@ class UnitsController {
         acUnits: unitsTable.acUnits,
         acType: unitsTable.acType,
         parkingType: unitsTable.parkingType,
-        furnishing: unitsTable.furnishing,
-        kitchenType: unitsTable.kitchenType,
         amenities: unitsTable.amenities,
         amenitiesData: unitsTable.amenitiesData,
-        yearBuilt: unitsTable.yearBuilt,
         finishingLookupId: unitsTable.finishingLookupId,
         facadeLength: unitsTable.facadeLength,
         unitLength: unitsTable.unitLength,
