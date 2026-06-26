@@ -12,9 +12,6 @@ import { assertNationalAddress } from "../../common/national-address";
 import { scopeId } from "../../common/scope";
 import { listQuerySchema } from "../../common/pagination";
 import { assertWithinQuota } from "../../common/quota";
-import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolve";
-
-const OWNER_LOOKUP_SPEC = [{ idField: "nationalityLookupId", out: "nationality", mode: "labelAr" as const }];
 
 const FIELDS = [
   "name", "shortName", "type", "status", "idNumber", "phone", "email", "iban",
@@ -29,8 +26,6 @@ const FIELDS = [
   "isDraft",
   // Default landlord — newly-created properties auto-link to this one.
   "isDefault",
-  // Lookups-FK refactor — nationality is now FK-only.
-  "nationalityLookupId",
 ] as const;
 
 @ApiTags("owners")
@@ -67,7 +62,6 @@ class OwnersController {
         ? this.db.select({ total: count() }).from(ownersTable).where(where)
         : Promise.resolve([{ total: 0 }]),
     ]);
-    await attachLookupLabels(this.db, rows, OWNER_LOOKUP_SPEC);
     if (!usePaginated) return rows;
     return { data: rows, page: q.page, pageSize: q.pageSize, total: Number(totalRow[0]?.total ?? 0) };
   }
@@ -92,7 +86,6 @@ class OwnersController {
       shortName: body.shortName ?? null,
       type: body.type || "individual",
       idNumber: body.idNumber ?? null,
-      nationalityLookupId: body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality),
       phone: body.phone ?? null,
       email: body.email ?? null,
       iban: body.iban ?? null,
@@ -118,7 +111,7 @@ class OwnersController {
       isDefault: wantsDefault,
       isDemo: "false",
     }).returning();
-    return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
+    return owner;
   }
 
   @Patch(":ownerId")
@@ -129,7 +122,6 @@ class OwnersController {
       .where(and(eq(ownersTable.id, id), eq(ownersTable.userId, scopeId(user)), isNull(ownersTable.deletedAt)));
     const updateData: Record<string, unknown> = {};
     for (const f of FIELDS) if (body[f] !== undefined) updateData[f] = body[f];
-    if (body.nationality !== undefined) updateData.nationalityLookupId = body.nationalityLookupId ?? await resolveLookupId(this.db, "nationality", body.nationality);
     // Promoting this landlord to default? Clear the flag on every other row
     // first (single default per account) so the target update can't clash.
     if (body.isDefault === true) {
@@ -148,7 +140,7 @@ class OwnersController {
       await this.db.update(contractsTable).set({ landlordName: owner.name })
         .where(and(eq(contractsTable.landlordName, prior.name), eq(contractsTable.userId, scopeId(user))));
     }
-    return (await attachLookupLabels(this.db, [{ ...owner }], OWNER_LOOKUP_SPEC))[0];
+    return owner;
   }
 
   @Delete(":ownerId")

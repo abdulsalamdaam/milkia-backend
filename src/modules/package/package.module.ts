@@ -171,7 +171,6 @@ class PackageController {
         phone: tn.phone ?? userPatch.phone ?? owner?.phone ?? null,
         email: tn.email ?? null,
         taxNumber: tn.taxNumber ?? null,
-        nationality: tn.nationality ?? null,
         address: tn.address ?? null,
         postalCode: tn.postalCode ?? null,
         status: "active",

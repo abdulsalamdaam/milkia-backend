@@ -16,7 +16,6 @@ import { resolveLookupId, attachLookupLabels } from "../../common/lookups-resolv
 /** Maps unit `*_lookup_id` FKs back to the text fields the clients expect. */
 const UNIT_LOOKUP_SPEC = [
   { idField: "typeLookupId", out: "type", mode: "key" as const },
-  { idField: "directionLookupId", out: "unitDirection", mode: "key" as const },
   { idField: "finishingLookupId", out: "finishing", mode: "key" as const },
 ];
 
@@ -32,7 +31,7 @@ const UNIT_FIELDS = [
   "unitNumber", "status", "floor", "area", "bedrooms", "bathrooms",
   "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
   "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing",
-  "kitchenType", "fiber", "amenities", "amenitiesData", "yearBuilt",
+  "kitchenType", "amenities", "amenitiesData", "yearBuilt",
   "facadeLength", "unitLength", "unitWidth", "unitHeight",
   "hasMezzanine", "notes",
   // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
@@ -40,7 +39,7 @@ const UNIT_FIELDS = [
   // exist (migration 0003_unit_attachments).
   "imageKey", "floorPlanKey", "documents", "images", "isDraft",
   // Lookups-FK refactor — FK ids alongside the legacy text columns.
-  "typeLookupId", "directionLookupId", "finishingLookupId",
+  "typeLookupId", "finishingLookupId",
 ] as const;
 
 @ApiTags("units")
@@ -91,10 +90,8 @@ class UnitsController {
         parkingType: unitsTable.parkingType,
         furnishing: unitsTable.furnishing,
         kitchenType: unitsTable.kitchenType,
-        fiber: unitsTable.fiber,
         amenities: unitsTable.amenities,
         amenitiesData: unitsTable.amenitiesData,
-        directionLookupId: unitsTable.directionLookupId,
         yearBuilt: unitsTable.yearBuilt,
         finishingLookupId: unitsTable.finishingLookupId,
         facadeLength: unitsTable.facadeLength,
@@ -186,7 +183,6 @@ class UnitsController {
     values.typeLookupId = unitTypeLookupId;
     // A custom "Other" type that matches no lookup stays as raw text on the row.
     values.typeOther = unitTypeLookupId == null && body.type ? String(body.type).trim() || null : null;
-    values.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     values.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
 
     const [unit] = await this.db.insert(unitsTable).values(values as any).returning();
@@ -212,7 +208,6 @@ class UnitsController {
       // Free-text "Other" type lives on the row, not in the shared lookups.
       updateData.typeOther = unitTypeLookupId == null && body.type ? String(body.type).trim() || null : null;
     }
-    if (body.unitDirection !== undefined) updateData.directionLookupId = body.directionLookupId ?? await resolveLookupId(this.db, "unit_direction", body.unitDirection);
     if (body.finishing !== undefined) updateData.finishingLookupId = body.finishingLookupId ?? await resolveLookupId(this.db, "unit_finishing", body.finishing);
     const [unit] = await this.db.update(unitsTable).set(updateData).where(eq(unitsTable.id, id)).returning();
     return overlayUnitTypeOther(await attachLookupLabels(this.db, [unit!], UNIT_LOOKUP_SPEC))[0];

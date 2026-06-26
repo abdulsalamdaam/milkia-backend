@@ -227,14 +227,14 @@ class LandlordMobileController {
     }));
   }
 
-  /** Tenants in the portfolio — with nationality, contract count and the
+  /** Tenants in the portfolio — with contract count and the
    *  linked property/unit from their active (or latest) contract. */
   @Get("tenants")
   async tenants(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
     const tenants = await this.db.select({
       id: tenantsTable.id, name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email,
-      type: tenantsTable.type, status: tenantsTable.status, nationality: tenantsTable.nationality,
+      type: tenantsTable.type, status: tenantsTable.status,
     }).from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))
       .orderBy(desc(tenantsTable.createdAt));
 
@@ -642,8 +642,9 @@ class LandlordMobileController {
     // Sign each attached document.
     const docs = Array.isArray((u as any).documents) ? (u as any).documents : [];
     const documents = await Promise.all(docs.map(async (d: any) => ({ ...d, url: await this.sign(d.key) })));
+    const { fiber: _fiber, directionLookupId: _directionLookupId, ...uRest } = u as any;
     const result: any = {
-      ...u,
+      ...uRest,
       rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null,
       imageUrl: await this.sign((u as any).imageKey), floorPlanUrl: await this.sign((u as any).floorPlanKey),
       documents,
@@ -654,7 +655,6 @@ class LandlordMobileController {
     };
     await attachLookupLabels(this.db, [result], [
       { idField: "typeLookupId", out: "type", mode: "labelAr" },
-      { idField: "directionLookupId", out: "direction", mode: "labelAr" },
       { idField: "finishingLookupId", out: "finishing", mode: "labelAr" },
     ]);
     return result;
@@ -727,7 +727,7 @@ class LandlordMobileController {
       id: c.id, contractNumber: c.contractNumber, status: c.status,
       // Tenant (full)
       tenantName: c.tenantName, tenantPhone: c.tenantPhone, tenantEmail: c.tenantEmail,
-      tenantIdNumber: a.tenantIdNumber ?? null, tenantNationality: a.tenantNationality ?? null,
+      tenantIdNumber: a.tenantIdNumber ?? null,
       tenantTaxNumber: a.tenantTaxNumber ?? null, tenantAddress: a.tenantAddress ?? null,
       // Landlord (full)
       landlordName: c.landlordName, landlordPhone: c.landlordPhone, landlordEmail: a.landlordEmail ?? null,

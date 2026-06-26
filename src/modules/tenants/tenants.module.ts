@@ -15,7 +15,7 @@ import { EmailService } from "../email/email.service";
 
 const FIELDS = [
   "name", "shortName", "type", "status", "nationalId", "phone", "email", "taxNumber",
-  "address", "postalCode", "additionalNumber", "buildingNumber", "nationality", "notes",
+  "address", "postalCode", "additionalNumber", "buildingNumber", "notes",
   // Phase 4 additions: financial info, structured national address,
   // representative (وكيل) fields.
   "iban", "employer", "monthlyIncome",
@@ -85,7 +85,6 @@ class TenantsController {
       postalCode: body.postalCode ?? null,
       additionalNumber: body.additionalNumber ?? null,
       buildingNumber: body.buildingNumber ?? null,
-      nationality: body.nationality ?? null,
       notes: body.notes ?? null,
       // Phase 4 additions:
       iban: body.iban ?? null,

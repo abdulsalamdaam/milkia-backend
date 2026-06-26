@@ -26,7 +26,7 @@ import { attachLookupLabels } from "../../common/lookups-resolve";
 
 const CONTRACT_FIELDS = [
   "tenantId",
-  "tenantType", "tenantName", "tenantIdNumber", "tenantPhone", "tenantNationality", "tenantEmail",
+  "tenantType", "tenantName", "tenantIdNumber", "tenantPhone", "tenantEmail",
   "tenantTaxNumber", "tenantAddress", "tenantPostalCode", "tenantAdditionalNumber", "tenantBuildingNumber",
   "repName", "repIdNumber", "companyUnified", "companyOrgType",
   "signingDate", "signingPlace", "ejarContractNumber",
@@ -34,7 +34,7 @@ const CONTRACT_FIELDS = [
   "depositStatus", "depositDueDate", "depositMethod", "prepaidRent", "prepaidMethod",
   "vatEnabled", "escalationRate", "escalationType",
   "agencyFee", "firstPaymentAmount", "additionalFees", "customSchedule",
-  "landlordName", "landlordNationality", "landlordIdNumber", "landlordPhone", "landlordEmail",
+  "landlordName", "landlordIdNumber", "landlordPhone", "landlordEmail",
   "landlordTaxNumber", "landlordAddress", "landlordPostalCode", "landlordAdditionalNumber", "landlordBuildingNumber",
   "status", "notes", "isDraft", "attachmentKey", "settledExternalUntil",
 ] as const;
@@ -110,7 +110,6 @@ class ContractsController {
     // Resolve the lookup FKs back to the text fields the clients expect.
     await attachLookupLabels(this.db, [...map.values()].flat(), [
       { idField: "typeLookupId", out: "type", mode: "key" },
-      { idField: "directionLookupId", out: "unitDirection", mode: "key" },
       { idField: "finishingLookupId", out: "finishing", mode: "key" },
       { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
       { idField: "propertyUsageLookupId", out: "propertyUsageType", mode: "key" },
@@ -171,7 +170,6 @@ class ContractsController {
         tenantShortName: tenantsTable.shortName,
         tenantIdNumber: contractsTable.tenantIdNumber,
         tenantPhone: contractsTable.tenantPhone,
-        tenantNationality: contractsTable.tenantNationality,
         tenantEmail: contractsTable.tenantEmail,
         tenantTaxNumber: contractsTable.tenantTaxNumber,
         tenantAddress: contractsTable.tenantAddress,
@@ -203,7 +201,6 @@ class ContractsController {
         additionalFees: contractsTable.additionalFees,
         customSchedule: contractsTable.customSchedule,
         landlordName: contractsTable.landlordName,
-        landlordNationality: contractsTable.landlordNationality,
         landlordIdNumber: contractsTable.landlordIdNumber,
         landlordPhone: contractsTable.landlordPhone,
         landlordEmail: contractsTable.landlordEmail,
@@ -290,7 +287,6 @@ class ContractsController {
       tenantName,
       tenantIdNumber: body.tenantIdNumber ?? null,
       tenantPhone: body.tenantPhone ?? null,
-      tenantNationality: body.tenantNationality ?? null,
       tenantEmail: body.tenantEmail ?? null,
       tenantTaxNumber: body.tenantTaxNumber ?? null,
       tenantAddress: body.tenantAddress ?? null,
@@ -322,7 +318,6 @@ class ContractsController {
       additionalFees,
       customSchedule: customSchedule && customSchedule.length > 0 ? customSchedule : null,
       landlordName: body.landlordName ?? null,
-      landlordNationality: body.landlordNationality ?? null,
       landlordIdNumber: body.landlordIdNumber ?? null,
       landlordPhone: body.landlordPhone ?? null,
       landlordEmail: body.landlordEmail ?? null,

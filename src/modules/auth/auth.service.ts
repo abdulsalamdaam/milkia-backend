@@ -698,7 +698,6 @@ export class AuthService {
         email: tenant.email,
         type: tenant.type,
         status: tenant.status,
-        nationality: tenant.nationality,
       },
     };
   }
@@ -759,7 +758,6 @@ export class AuthService {
       email: tenant.email,
       type: tenant.type,
       status: tenant.status,
-      nationality: tenant.nationality,
       address: tenant.address,
       lastLoginAt: tenant.lastLoginAt,
     };
