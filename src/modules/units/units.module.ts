@@ -32,7 +32,7 @@ const UNIT_FIELDS = [
   "unitNumber", "status", "floor", "area", "bedrooms", "bathrooms",
   "livingRooms", "halls", "parkingSpaces", "rentPrice", "electricityMeter",
   "waterMeter", "gasMeter", "acUnits", "acType", "parkingType", "furnishing",
-  "kitchenType", "fiber", "amenities", "yearBuilt",
+  "kitchenType", "fiber", "amenities", "amenitiesData", "yearBuilt",
   "facadeLength", "unitLength", "unitWidth", "unitHeight",
   "hasMezzanine", "notes",
   // Attachments — Phase 7. MinIO keys + a JSON array for multi-doc uploads.
@@ -93,6 +93,7 @@ class UnitsController {
         kitchenType: unitsTable.kitchenType,
         fiber: unitsTable.fiber,
         amenities: unitsTable.amenities,
+        amenitiesData: unitsTable.amenitiesData,
         directionLookupId: unitsTable.directionLookupId,
         yearBuilt: unitsTable.yearBuilt,
         finishingLookupId: unitsTable.finishingLookupId,

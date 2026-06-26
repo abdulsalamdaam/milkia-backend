@@ -33,6 +33,13 @@ export const unitsTable = pgTable("units", {
   kitchenType: text("kitchen_type"),
   fiber: text("fiber"),
   amenities: text("amenities"),
+  // JSON string { counts: { <facilityKey>: number } } holding the full
+  // facility-count breakdown — including each AC type (central/split/desert/
+  // window) and rooms with no dedicated column (maid's room, kitchen, storage,
+  // backyard, elevator). Mirrors properties.amenities_data so the unit add/edit
+  // forms persist every selected facility without collapsing them into the
+  // single ac_units total. See migration 0057.
+  amenitiesData: text("amenities_data"),
   /* extra detail fields */
   yearBuilt: text("year_built"),
   facadeLength: numeric("facade_length", { precision: 10, scale: 2 }),
