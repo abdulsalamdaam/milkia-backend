@@ -109,13 +109,16 @@ class LandlordMobileController {
       date: c.createdAt ? new Date(c.createdAt).toISOString() : null,
     });
 
-    const paid = await this.db.select({ amount: paymentsTable.amount, paidDate: paymentsTable.paidDate, contractNumber: contractsTable.contractNumber })
+    // Use updatedAt (a real timestamp, stamped when the payment is marked paid)
+    // for the activity time — paidDate is a DATE-only column, so it would read as
+    // midnight UTC and show a several-hour skew in the "X ago" label.
+    const paid = await this.db.select({ amount: paymentsTable.amount, updatedAt: paymentsTable.updatedAt, contractNumber: contractsTable.contractNumber })
       .from(paymentsTable).leftJoin(contractsTable, eq(contractsTable.id, paymentsTable.contractId))
       .where(and(eq(paymentsTable.userId, uid), eq(paymentsTable.status, "paid"), isNull(paymentsTable.deletedAt)))
-      .orderBy(desc(paymentsTable.paidDate)).limit(6);
+      .orderBy(desc(paymentsTable.updatedAt)).limit(6);
     for (const p of paid) items.push({
       type: "payment", title: String(this.num(p.amount)), subtitle: p.contractNumber || "",
-      date: p.paidDate ? new Date(p.paidDate).toISOString() : null,
+      date: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
     });
 
     const maint = await this.db.select({ description: maintenanceRequestsTable.description, unitLabel: maintenanceRequestsTable.unitLabel, createdAt: maintenanceRequestsTable.createdAt })
