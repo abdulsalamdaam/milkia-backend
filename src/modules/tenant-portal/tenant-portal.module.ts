@@ -86,6 +86,10 @@ export class TenantPortalController {
         status: contractsTable.status,
         notes: contractsTable.notes,
         vatEnabled: contractsTable.vatEnabled,
+        escalationType: contractsTable.escalationType,
+        escalationRate: contractsTable.escalationRate,
+        depositStatus: contractsTable.depositStatus,
+        depositDueDate: contractsTable.depositDueDate,
         // Tenant identity (snapshot) — so the tenant sees their own record too.
         tenantType: contractsTable.tenantType,
         tenantName: contractsTable.tenantName,
