@@ -42,6 +42,7 @@ const PASSIVE_MIGRATIONS = [
   "2026_05_companies_roles_email_otp.sql",
   "2026_05_drop_legacy_user_columns.sql",
   "2026_06_unit_amenities_data.sql",
+  "2026_06_fee_type_utilities.sql",
 ];
 
 async function runSqlFile(client: any, label: string, file: string) {
