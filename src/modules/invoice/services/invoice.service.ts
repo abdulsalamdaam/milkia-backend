@@ -72,7 +72,10 @@ export class InvoiceService {
     if (!dto.lines?.length) throw new BadRequestException("invoice must have at least one line");
     if (!dto.invoiceNumber) throw new BadRequestException("invoiceNumber required");
 
-    // Reject duplicate invoice number early for a clean error.
+    // Reject duplicate invoice number early for a clean error. NOTE: the unique
+    // index is (userId, invoiceNumber) and does NOT exclude soft-deleted rows,
+    // so this check must NOT filter by deletedAt — otherwise a previously-deleted
+    // number passes here but collides on insert as a raw DB error.
     const [existing] = await this.db
       .select({ id: invoicesTable.id })
       .from(invoicesTable)
@@ -80,7 +83,6 @@ export class InvoiceService {
         and(
           eq(invoicesTable.userId, userId),
           eq(invoicesTable.invoiceNumber, dto.invoiceNumber),
-          isNull(invoicesTable.deletedAt),
         ),
       );
     if (existing) throw new ConflictException(`Invoice number ${dto.invoiceNumber} already exists`);
@@ -92,6 +94,17 @@ export class InvoiceService {
     const issueTime = todayIsoTime();
 
     const sellerSnapshot: SellerSnapshot = this.sellerSnapshotFrom(creds);
+
+    // ZATCA: a tax invoice's buyer and seller cannot be the same taxable person.
+    // A contract where the tenant (buyer) and landlord (seller) carry the SAME
+    // VAT number is invalid — reject it clearly instead of letting ZATCA bounce.
+    const buyerVat = (dto.buyer?.vat ?? "").trim();
+    const sellerVat = (sellerSnapshot.vat ?? "").trim();
+    if (dto.profile === "standard" && buyerVat && sellerVat && buyerVat === sellerVat) {
+      throw new BadRequestException(
+        "الرقم الضريبي للمشتري لا يمكن أن يطابق الرقم الضريبي للبائع — المستأجر والمؤجر لا يمكن أن يحملا نفس الرقم الضريبي. (Buyer and seller VAT numbers must differ.)",
+      );
+    }
 
     // ZATCA BR-KSA-63: a standard tax invoice must carry a COMPLETE national
     // postal address for both seller and buyer. We never silently drop address
