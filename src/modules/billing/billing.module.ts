@@ -586,14 +586,52 @@ class SimpleInvoicesController {
         left = round2(left - amt);
       }
     } else if (body?.countAsCollection) {
-      // "Add collection" (not tied to an installment): record a real collection
-      // against the voucher so it appears and counts in the Collections tab —
-      // the voucher itself is the evidence (سند قبض).
-      await this.db.insert(paymentCollectionsTable).values({
-        paymentId: null, userId: uid, amount: amount.toFixed(2), collectedDate: paidDate,
-        method, receiptNumber: voucher, invoiceId: doc.id, attachmentKey,
-        notes: body?.notes ?? `سند قبض ${voucher}`,
-      } as any);
+      // "Add collection" (not tied to a specific installment): apply the amount
+      // to the contract's UNPAID installments — fees first, then rent, oldest
+      // first — so a collected fee/rent installment flips to paid/partial and no
+      // longer shows as "pending" (the bug this fixes). Any remainder that the
+      // schedule can't absorb is recorded as a standalone collection so the
+      // money is still counted in the Collections tab.
+      let left = amount;
+      const unpaid = await this.db.select().from(paymentsTable)
+        .where(and(
+          eq(paymentsTable.contractId, contractId),
+          eq(paymentsTable.userId, uid),
+          isNull(paymentsTable.deletedAt),
+          inArray(paymentsTable.status, ["pending", "overdue", "partially_paid"] as any),
+        ))
+        // Fee rows carry a non-null description; rent rows are null → DESC puts
+        // fees first, then rent. Within each, oldest due date first.
+        .orderBy(desc(paymentsTable.description), asc(paymentsTable.dueDate));
+      for (const payment of unpaid) {
+        if (left <= 0.01) break;
+        const prior = await this.db.select({ total: sum(paymentCollectionsTable.amount) })
+          .from(paymentCollectionsTable).where(eq(paymentCollectionsTable.paymentId, payment.id));
+        const collectedBefore = round2(Number(prior[0]?.total ?? 0));
+        const totalDue = round2(Number(payment.amount));
+        const remaining = round2(totalDue - collectedBefore);
+        if (remaining <= 0.01) continue;
+        const amt = round2(Math.min(remaining, left));
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: payment.id, userId: uid, amount: amt.toFixed(2), collectedDate: paidDate,
+          method, receiptNumber: voucher, invoiceId: doc.id, attachmentKey,
+          notes: body?.notes ?? `سند قبض ${voucher}`,
+        } as any);
+        const after = round2(collectedBefore + amt);
+        const status = after >= totalDue - 0.01 ? "paid" : "partially_paid";
+        await this.db.update(paymentsTable).set({
+          status, paidDate: status === "paid" ? paidDate : payment.paidDate, receiptNumber: voucher,
+        }).where(eq(paymentsTable.id, payment.id));
+        left = round2(left - amt);
+      }
+      // Remainder the installments couldn't absorb → standalone collection.
+      if (left > 0.01) {
+        await this.db.insert(paymentCollectionsTable).values({
+          paymentId: null, userId: uid, amount: left.toFixed(2), collectedDate: paidDate,
+          method, receiptNumber: voucher, invoiceId: doc.id, attachmentKey,
+          notes: body?.notes ?? `سند قبض ${voucher}`,
+        } as any);
+      }
     }
     return doc;
   }
