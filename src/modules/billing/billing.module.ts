@@ -386,11 +386,21 @@ class SimpleInvoicesController {
 
     const [u] = await this.db.select({ companyId: usersTable.companyId })
       .from(usersTable).where(eq(usersTable.id, uid)).limit(1);
+    // The commission seller (the management account) charges VAT when it is
+    // VAT-registered — either via its company record OR, for an individual
+    // account with no company, via its default landlord owner's tax number.
     let vatReg = false;
     if (u?.companyId) {
       const [comp] = await this.db.select({ vat: companiesTable.vatNumber })
         .from(companiesTable).where(eq(companiesTable.id, u.companyId)).limit(1);
       vatReg = !!(comp?.vat && String(comp.vat).trim());
+    }
+    if (!vatReg) {
+      const [defOwner] = await this.db.select({ tax: ownersTable.taxNumber })
+        .from(ownersTable)
+        .where(and(eq(ownersTable.userId, uid), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt)))
+        .limit(1);
+      vatReg = !!(defOwner?.tax && String(defOwner.tax).trim());
     }
 
     // Commission base = pre-VAT RENT only. Rent installments have a null
