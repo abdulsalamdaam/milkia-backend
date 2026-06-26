@@ -108,6 +108,7 @@ export class TenantPortalController {
         signingPlace: contractsTable.signingPlace,
         agencyFee: contractsTable.agencyFee,
         firstPaymentAmount: contractsTable.firstPaymentAmount,
+        prepaidRent: contractsTable.prepaidRent,
         additionalFees: contractsTable.additionalFees,
       })
       .from(contractsTable)

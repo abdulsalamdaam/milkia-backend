@@ -588,6 +588,9 @@ class LandlordMobileController {
     const result: any = {
       ...p,
       imageUrl: await this.sign((p as any).imageKey),
+      // Sign the full photo gallery so the app can show every property image.
+      imageUrls: (await Promise.all((Array.isArray((p as any).images) ? (p as any).images : [])
+        .map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean),
       deed,
       occupancyRate: units.length ? Math.round((units.filter((u) => u.status === "rented").length / units.length) * 100) : 0,
       rentedUnits: units.filter((u) => u.status === "rented").length,
@@ -650,6 +653,9 @@ class LandlordMobileController {
       ...uRest,
       rentPrice: u.rentPrice ? this.num(u.rentPrice) : null, area: u.area ? this.num(u.area) : null,
       imageUrl: await this.sign((u as any).imageKey), floorPlanUrl: await this.sign((u as any).floorPlanKey),
+      // Sign the full photo gallery so the app can show every unit image.
+      imageUrls: (await Promise.all((Array.isArray((u as any).images) ? (u as any).images : [])
+        .map((k: any) => this.sign(typeof k === "string" ? k : k?.key)))).filter(Boolean),
       documents,
       property: row.propertyName, propertyId: row.propertyId,
       currentContract: cu ? { ...cu, monthlyRent: this.num(cu.monthlyRent) } : null,
@@ -727,7 +733,7 @@ class LandlordMobileController {
     })
       .from(contractUnitsTable)
       .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
-      .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
+      .leftJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
       .where(eq(contractUnitsTable.contractId, cid));
     await attachLookupLabels(this.db, cu, [
       { idField: "propertyTypeLookupId", out: "propertyType", mode: "key" },
@@ -769,6 +775,9 @@ class LandlordMobileController {
       depositStatus: a.depositStatus ?? null, depositDueDate: a.depositDueDate ?? null,
       agencyFee: a.agencyFee ? this.num(a.agencyFee) : 0,
       firstPaymentAmount: a.firstPaymentAmount ? this.num(a.firstPaymentAmount) : 0,
+      // Advance (prepaid) rent paid up-front — "إيجار مدفوع مقدماً".
+      prepaidRent: a.prepaidRent ? this.num(a.prepaidRent) : 0,
+      prepaidMethod: a.prepaidMethod ?? null,
       vatEnabled: !!a.vatEnabled,
       escalationType: a.escalationType ?? null, escalationRate: a.escalationRate ? this.num(a.escalationRate) : 0,
       notes: a.notes ?? null,
