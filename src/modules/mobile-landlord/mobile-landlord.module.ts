@@ -717,8 +717,10 @@ class LandlordMobileController {
       : [];
     const linkOf = new Map<number, { unitNumber: string | null; propertyName: string | null }>();
     for (const r of cu) if (!linkOf.has(r.contractId)) linkOf.set(r.contractId, { unitNumber: r.unitNumber, propertyName: r.propertyName });
+    // These tenant fields are intentionally not surfaced anywhere.
+    const { nationality: _n, employer: _e, monthlyIncome: _m, ...tRest } = t as any;
     return {
-      ...t,
+      ...tRest,
       representativeDocUrl: await this.sign((t as any).representativeDocUrl),
       contracts: contracts.map((c) => ({
         id: c.id, contractNumber: c.contractNumber, status: c.status, monthlyRent: this.num(c.monthlyRent),

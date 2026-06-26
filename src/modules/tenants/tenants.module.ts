@@ -18,7 +18,7 @@ const FIELDS = [
   "address", "postalCode", "additionalNumber", "buildingNumber", "notes",
   // Phase 4 additions: financial info, structured national address,
   // representative (وكيل) fields.
-  "iban", "employer", "monthlyIncome",
+  "iban",
   "nationalAddressCity", "nationalAddressDistrict", "nationalAddressStreet",
   "isRepresentative", "representativeDocUrl",
   "originalTenantName", "originalTenantIdNumber", "originalTenantPhone", "originalTenantEmail",
@@ -88,8 +88,6 @@ class TenantsController {
       notes: body.notes ?? null,
       // Phase 4 additions:
       iban: body.iban ?? null,
-      employer: body.employer ?? null,
-      monthlyIncome: body.monthlyIncome != null && body.monthlyIncome !== "" ? String(body.monthlyIncome) : null,
       nationalAddressCity: body.nationalAddressCity ?? null,
       nationalAddressDistrict: body.nationalAddressDistrict ?? null,
       nationalAddressStreet: body.nationalAddressStreet ?? null,
