@@ -2,7 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, Inject, UnauthorizedExceptio
 import type { Request } from "express";
 import { JwtService } from "@nestjs/jwt";
 import { and, eq, isNull } from "drizzle-orm";
-import { rolesTable, usersTable } from "@oqudk/database";
+import { ownersTable, rolesTable, usersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 
 /**
@@ -26,6 +26,12 @@ export type AuthUser = {
   ownerUserId?: number | null;
   companyId?: number | null;
   roleId?: number | null;
+  /**
+   * Set ONLY for owner (landlord) mobile logins (kind "owner"). When present,
+   * the request is additionally narrowed to this single owner's data inside
+   * the account scope. Null/undefined for normal user/employee logins.
+   */
+  ownerScopeId?: number | null;
 };
 
 @Injectable()
@@ -40,12 +46,39 @@ export class JwtAuthGuard implements CanActivate {
     const header = req.headers.authorization;
     if (!header?.startsWith("Bearer ")) throw new UnauthorizedException("Unauthorized");
     const token = header.slice(7);
-    let decoded: AuthUser;
+    type DecodedToken = Omit<AuthUser, "kind"> & { kind?: string; ownerId?: number };
+    let decoded: DecodedToken;
     try {
-      decoded = this.jwt.verify<AuthUser>(token);
+      decoded = this.jwt.verify<DecodedToken>(token);
     } catch {
       throw new UnauthorizedException("Invalid token");
     }
+
+    // Owner (landlord) mobile login — no usersTable tokenVersion check; the
+    // request is scoped to the managing account (owner.userId) AND narrowed to
+    // this single owner via ownerScopeId.
+    if (decoded.kind === "owner") {
+      const ownerId = decoded.ownerId;
+      if (ownerId == null) throw new UnauthorizedException("Invalid token");
+      const [owner] = await this.db
+        .select({ id: ownersTable.id, userId: ownersTable.userId })
+        .from(ownersTable)
+        .where(and(eq(ownersTable.id, ownerId), eq(ownersTable.status, "active"), isNull(ownersTable.deletedAt)));
+      if (!owner) throw new UnauthorizedException("Unauthorized");
+      req.user = {
+        id: owner.userId,
+        email: "",
+        role: "owner",
+        kind: "user", // so downstream scopeId / guards treat it as a user-scoped request
+        ownerUserId: null,
+        ownerScopeId: owner.id,
+        permissions: [],
+        companyId: null,
+        roleId: null,
+      };
+      return true;
+    }
+
     if (decoded.kind && decoded.kind !== "user") throw new UnauthorizedException("Invalid token kind");
 
     // Single round-trip: user row + linked role row. Role key + permissions
@@ -72,6 +105,7 @@ export class JwtAuthGuard implements CanActivate {
     }
     req.user = {
       ...decoded,
+      kind: "user",
       role: row.roleKey ?? "user",
       permissions: row.rolePermissions ?? [],
       ownerUserId: row.ownerUserId ?? null,

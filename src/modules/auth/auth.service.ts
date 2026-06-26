@@ -3,7 +3,7 @@ import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcryptjs";
 import { randomInt } from "node:crypto";
 import { and, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
-import { companiesTable, emailOtpTokensTable, loginLogsTable, rolesTable, tenantsTable, usersTable } from "@oqudk/database";
+import { companiesTable, emailOtpTokensTable, loginLogsTable, ownersTable, rolesTable, tenantsTable, usersTable } from "@oqudk/database";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import type { AuthUser } from "../../common/guards/jwt-auth.guard";
 import type { TenantPayload } from "../../common/guards/tenant-auth.guard";
@@ -69,6 +69,18 @@ export class AuthService {
   signUserToken(payload: { id: number; email: string; role: AuthUser["role"]; tokenVersion: number }): string {
     return this.jwt.sign(
       { id: payload.id, email: payload.email, role: payload.role, kind: "user", tv: payload.tokenVersion },
+    );
+  }
+
+  /* ── Owner token ──
+   * Owners (rows in ownersTable, added via the web "landlord section") log in
+   * by phone on the mobile app and see ONLY their own data. The token carries
+   * the managing account's user id as `id` (so scopeId resolves the account)
+   * plus the `ownerId` to narrow the scope to that single owner. Owners have
+   * no tokenVersion, so `tv` is omitted. */
+  signOwnerToken(payload: { ownerId: number; accountUserId: number }): string {
+    return this.jwt.sign(
+      { id: payload.accountUserId, ownerId: payload.ownerId, role: "owner", kind: "owner" },
     );
   }
 
@@ -706,13 +718,35 @@ export class AuthService {
    * Mirrors the tenant phone flow but resolves a USER by phone and returns a
    * USER JWT (kind "user"), so landlords use the same phone+OTP experience.
    * SMS is paused like the tenant flow — the bypass code is "1234". */
+  /**
+   * Find an active owner (landlord, added via the web) whose EFFECTIVE login
+   * phone matches the given raw number. The effective login phone is:
+   *   isRepresentative === false → owners.phone
+   *   isRepresentative === true  → owners.originalOwnerPhone (the actual owner;
+   *                                the main phone then belongs to the agent/وكيل)
+   * Returns the first match or undefined.
+   */
+  private async findOwnerByLoginPhone(raw: string) {
+    const variants = phoneVariants(raw);
+    const [owner] = await this.db.select().from(ownersTable).where(and(
+      or(
+        and(eq(ownersTable.isRepresentative, false), inArray(ownersTable.phone, variants)),
+        and(eq(ownersTable.isRepresentative, true), inArray(ownersTable.originalOwnerPhone, variants)),
+      ),
+      eq(ownersTable.status, "active"),
+      isNull(ownersTable.deletedAt),
+    ));
+    return owner;
+  }
+
   async userPhoneRequestOtp(input: { phone: string }) {
     const raw = (input.phone || "").trim();
     if (!raw) throw new BadRequestException("رقم الجوال مطلوب");
     const [user] = await this.db.select({ id: usersTable.id, isActive: usersTable.isActive })
       .from(usersTable).where(and(inArray(usersTable.phone, phoneVariants(raw)), isNull(usersTable.deletedAt)));
+    const matched = (user && user.isActive) ? true : !!(await this.findOwnerByLoginPhone(raw));
     // Generic response — don't disclose whether the number is registered.
-    if (!user || !user.isActive) return { success: true, message: "إذا كان الرقم مسجّلاً، فقد أرسلنا رمز التحقق." };
+    if (!matched) return { success: true, message: "إذا كان الرقم مسجّلاً، فقد أرسلنا رمز التحقق." };
     new Logger("AuthService").log(`[bypass] landlord OTP request for ${this.twilio.normalizePhone(raw)} — SMS skipped, accept code 1234`);
     return { success: true, message: "تم إرسال رمز التحقق إلى جوالك." };
   }
@@ -733,6 +767,19 @@ export class AuthService {
       .from(usersTable).leftJoin(rolesTable, eq(usersTable.roleId, rolesTable.id))
       .where(and(inArray(usersTable.phone, phoneVariants(raw)), isNull(usersTable.deletedAt)));
     if (!user || !user.isActive) {
+      // No matching user — fall back to an owner (landlord) login by phone.
+      const owner = await this.findOwnerByLoginPhone(raw);
+      if (owner) {
+        if (code !== "1234") {
+          await this.recordLogin(null, phone, "failed", ctx.ip, ctx.ua);
+          throw new UnauthorizedException("رمز التحقق غير صحيح");
+        }
+        await this.recordLogin(null, phone, "success", ctx.ip, ctx.ua);
+        const effectiveEmail = owner.isRepresentative ? owner.originalOwnerEmail : owner.email;
+        const effectivePhone = owner.isRepresentative ? owner.originalOwnerPhone : owner.phone;
+        const token = this.signOwnerToken({ ownerId: owner.id, accountUserId: owner.userId });
+        return { token, user: { id: owner.id, name: owner.name, email: effectiveEmail, phone: effectivePhone, role: "owner" } };
+      }
       await this.recordLogin(null, phone, "failed", ctx.ip, ctx.ua);
       throw new UnauthorizedException("بيانات غير صحيحة");
     }

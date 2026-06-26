@@ -29,6 +29,32 @@ class LandlordMobileController {
   constructor(@Inject(DRIZZLE) private readonly db: Drizzle, private readonly uploads: UploadsService) {}
 
   private num(s: string | null | undefined) { return parseFloat(s || "0") || 0; }
+
+  /**
+   * For an OWNER (landlord) mobile login the request is narrowed to that single
+   * owner. Returns the set of property ids and contract ids that belong to the
+   * owner (within the account scope). For normal user/employee logins
+   * (`ownerScopeId == null`) returns `{ propIds: null, contractIds: null }`,
+   * meaning "no extra restriction".
+   *
+   * NOTE: an empty array `[]` means "this owner owns nothing" → callers must
+   * AND-in `inArray(col, [])` which yields no rows (Drizzle emits a constant
+   * false predicate for an empty list), so the owner correctly sees nothing.
+   */
+  private async ownerScope(user: AuthUser): Promise<{ propIds: number[] | null; contractIds: number[] | null }> {
+    if (user.ownerScopeId == null) return { propIds: null, contractIds: null };
+    const uid = scopeId(user);
+    const props = await this.db.select({ id: propertiesTable.id }).from(propertiesTable)
+      .where(and(eq(propertiesTable.userId, uid), eq(propertiesTable.ownerId, user.ownerScopeId), isNull(propertiesTable.deletedAt)));
+    const propIds = props.map((p) => p.id);
+    if (!propIds.length) return { propIds: [], contractIds: [] };
+    const cu = await this.db.selectDistinct({ contractId: contractsTable.id })
+      .from(contractUnitsTable)
+      .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+      .innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+      .where(and(inArray(unitsTable.propertyId, propIds), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+    return { propIds, contractIds: cu.map((c) => c.contractId) };
+  }
   /** Resolve a stored object key to a short-lived signed URL (or null). */
   private async sign(key: string | null | undefined): Promise<string | null> {
     if (!key) return null;
@@ -39,6 +65,15 @@ class LandlordMobileController {
   @Get("profile")
   async profile(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    // Owner login → return the OWNER's own (effective) identity, not the account.
+    if (user.ownerScopeId != null) {
+      const [o] = await this.db.select().from(ownersTable)
+        .where(and(eq(ownersTable.id, user.ownerScopeId), isNull(ownersTable.deletedAt)));
+      const name = o?.name ?? null;
+      const email = o ? (o.isRepresentative ? o.originalOwnerEmail : o.email) : null;
+      const phone = o ? (o.isRepresentative ? o.originalOwnerPhone : o.phone) : null;
+      return { id: o?.id ?? null, name, email, phone, createdAt: o?.createdAt ?? null, landlordsCount: 1, isEmployee: false };
+    }
     const [u] = await this.db.select({ id: usersTable.id, name: usersTable.name, email: usersTable.email, phone: usersTable.phone, createdAt: usersTable.createdAt })
       .from(usersTable).where(eq(usersTable.id, uid));
     const owners = await this.db.select({ id: ownersTable.id }).from(ownersTable)
@@ -50,8 +85,10 @@ class LandlordMobileController {
   @Get("summary")
   async summary(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const props = await this.db.select({ id: propertiesTable.id, totalUnits: propertiesTable.totalUnits }).from(propertiesTable)
-      .where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+      .where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt),
+        ...(scope.propIds ? [inArray(propertiesTable.id, scope.propIds)] : [])));
     const propIds = props.map((p) => p.id);
     // Occupancy denominator is the property's declared total units (sum), not
     // the count of created unit records.
@@ -67,13 +104,15 @@ class LandlordMobileController {
       maintenanceUnits = units.filter((u) => u.status === "maintenance").length;
     }
 
-    const contracts = await this.db.select({ status: contractsTable.status, monthlyRent: contractsTable.monthlyRent })
-      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+    const contracts = await this.db.select({ id: contractsTable.id, tenantId: contractsTable.tenantId, status: contractsTable.status, monthlyRent: contractsTable.monthlyRent })
+      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])));
     const activeContractsCount = contracts.filter((c) => c.status === "active").length;
     const monthlyRecurring = contracts.filter((c) => c.status === "active").reduce((s, c) => s + this.num(c.monthlyRent), 0);
 
     const payments = await this.db.select({ status: paymentsTable.status, amount: paymentsTable.amount, paidDate: paymentsTable.paidDate })
-      .from(paymentsTable).where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
+      .from(paymentsTable).where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(paymentsTable.contractId, scope.contractIds)] : [])));
     const now = new Date();
     const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
     const collectedTotal = payments.filter((p) => p.status === "paid").reduce((s, p) => s + this.num(p.amount), 0);
@@ -81,11 +120,14 @@ class LandlordMobileController {
     const pendingDue = payments.filter((p) => p.status === "pending" || p.status === "overdue").reduce((s, p) => s + this.num(p.amount), 0);
     const overduePaymentsCount = payments.filter((p) => p.status === "overdue").length;
 
-    const [tenantsRow] = await this.db.select({ id: tenantsTable.id }).from(tenantsTable)
-      .where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)));
-    const tenantsCount = (await this.db.select({ id: tenantsTable.id }).from(tenantsTable)
-      .where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))).length;
-    void tenantsRow;
+    let tenantsCount: number;
+    if (scope.contractIds != null) {
+      // Owner scope: only tenants referenced by the owner's contracts.
+      tenantsCount = new Set(contracts.map((c) => c.tenantId).filter((x): x is number => x != null)).size;
+    } else {
+      tenantsCount = (await this.db.select({ id: tenantsTable.id }).from(tenantsTable)
+        .where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))).length;
+    }
 
     const occDenom = totalUnits > 0 ? totalUnits : unitsCount;
     return {
@@ -101,12 +143,14 @@ class LandlordMobileController {
   @Get("recent-activity")
   async recentActivity(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     type Item = { type: "contract" | "payment" | "maintenance"; title: string; subtitle: string; date: string | null };
     const items: Item[] = [];
 
     const contracts = await this.db.select({
       contractNumber: contractsTable.contractNumber, tenantName: contractsTable.tenantName, createdAt: contractsTable.createdAt,
-    }).from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)))
+    }).from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+      ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])))
       .orderBy(desc(contractsTable.createdAt)).limit(6);
     for (const c of contracts) items.push({
       type: "contract", title: c.tenantName || c.contractNumber || "", subtitle: c.contractNumber || "",
@@ -118,7 +162,8 @@ class LandlordMobileController {
     // midnight UTC and show a several-hour skew in the "X ago" label.
     const paid = await this.db.select({ amount: paymentsTable.amount, updatedAt: paymentsTable.updatedAt, contractNumber: contractsTable.contractNumber })
       .from(paymentsTable).leftJoin(contractsTable, eq(contractsTable.id, paymentsTable.contractId))
-      .where(and(eq(paymentsTable.userId, uid), eq(paymentsTable.status, "paid"), isNull(paymentsTable.deletedAt)))
+      .where(and(eq(paymentsTable.userId, uid), eq(paymentsTable.status, "paid"), isNull(paymentsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(paymentsTable.contractId, scope.contractIds)] : [])))
       .orderBy(desc(paymentsTable.updatedAt)).limit(6);
     for (const p of paid) items.push({
       type: "payment", title: String(this.num(p.amount)), subtitle: p.contractNumber || "",
@@ -126,7 +171,8 @@ class LandlordMobileController {
     });
 
     const maint = await this.db.select({ description: maintenanceRequestsTable.description, unitLabel: maintenanceRequestsTable.unitLabel, createdAt: maintenanceRequestsTable.createdAt })
-      .from(maintenanceRequestsTable).where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt)))
+      .from(maintenanceRequestsTable).where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(maintenanceRequestsTable.contractId, scope.contractIds)] : [])))
       .orderBy(desc(maintenanceRequestsTable.createdAt)).limit(6);
     for (const m of maint) items.push({
       type: "maintenance", title: m.description || "", subtitle: m.unitLabel || "",
@@ -140,8 +186,10 @@ class LandlordMobileController {
   @Get("properties")
   async properties(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const props = await this.db.select().from(propertiesTable)
-      .where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)))
+      .where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt),
+        ...(scope.propIds ? [inArray(propertiesTable.id, scope.propIds)] : [])))
       .orderBy(desc(propertiesTable.createdAt));
     const propIds = props.map((p) => p.id);
     const units = propIds.length
@@ -183,6 +231,7 @@ class LandlordMobileController {
   @Get("units")
   async units(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const rows = await this.db
       .select({
         id: unitsTable.id, unitNumber: unitsTable.unitNumber, status: unitsTable.status,
@@ -192,7 +241,8 @@ class LandlordMobileController {
       })
       .from(unitsTable)
       .innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
-      .where(and(eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt), isNull(propertiesTable.deletedAt)))
+      .where(and(eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt), isNull(propertiesTable.deletedAt),
+        ...(scope.propIds ? [inArray(unitsTable.propertyId, scope.propIds)] : [])))
       .orderBy(desc(unitsTable.createdAt));
     // Current tenant per unit (via the active contract).
     const unitIds = rows.map((r) => r.id);
@@ -216,8 +266,10 @@ class LandlordMobileController {
   @Get("contracts")
   async contracts(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const contracts = await this.db.select().from(contractsTable)
-      .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)))
+      .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])))
       .orderBy(desc(contractsTable.createdAt));
     const ids = contracts.map((c) => c.id);
     const cu = ids.length
@@ -251,15 +303,23 @@ class LandlordMobileController {
   @Get("tenants")
   async tenants(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
+
+    // Contracts (with first property/unit) grouped by the tenant's phone.
+    const contracts = await this.db.select({ id: contractsTable.id, tenantId: contractsTable.tenantId, tenantPhone: contractsTable.tenantPhone, status: contractsTable.status })
+      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])));
+
+    // Owner scope: only tenants referenced by the owner's contracts.
+    const tenantIds = scope.contractIds != null
+      ? [...new Set(contracts.map((c) => c.tenantId).filter((x): x is number => x != null))]
+      : null;
     const tenants = await this.db.select({
       id: tenantsTable.id, name: tenantsTable.name, phone: tenantsTable.phone, email: tenantsTable.email,
       type: tenantsTable.type, status: tenantsTable.status,
-    }).from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)))
+    }).from(tenantsTable).where(and(eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt),
+      ...(tenantIds ? [inArray(tenantsTable.id, tenantIds)] : [])))
       .orderBy(desc(tenantsTable.createdAt));
-
-    // Contracts (with first property/unit) grouped by the tenant's phone.
-    const contracts = await this.db.select({ id: contractsTable.id, tenantPhone: contractsTable.tenantPhone, status: contractsTable.status })
-      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
     const cids = contracts.map((c) => c.id);
     const cu = cids.length
       ? await this.db.select({ contractId: contractUnitsTable.contractId, unitNumber: unitsTable.unitNumber, propertyName: propertiesTable.name })
@@ -297,12 +357,14 @@ class LandlordMobileController {
   async owners(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
     const owners = await this.db.select({ id: ownersTable.id, name: ownersTable.name, phone: ownersTable.phone, email: ownersTable.email, type: ownersTable.type, status: ownersTable.status, taxNumber: ownersTable.taxNumber, iban: ownersTable.iban, isDefault: ownersTable.isDefault })
-      .from(ownersTable).where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)))
+      .from(ownersTable).where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt),
+        ...(user.ownerScopeId != null ? [eq(ownersTable.id, user.ownerScopeId)] : [])))
       .orderBy(desc(ownersTable.createdAt));
 
     // Properties (with unit counts) grouped by ownerId.
     const props = await this.db.select({ id: propertiesTable.id, ownerId: propertiesTable.ownerId })
-      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt),
+        ...(user.ownerScopeId != null ? [eq(propertiesTable.ownerId, user.ownerScopeId)] : [])));
     const propIds = props.map((p) => p.id);
     const units = propIds.length
       ? await this.db.select({ propertyId: unitsTable.propertyId }).from(unitsTable)
@@ -323,6 +385,7 @@ class LandlordMobileController {
   async owner(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const uid = scopeId(user);
     const oid = parseInt(id, 10);
+    if (user.ownerScopeId != null && oid !== user.ownerScopeId) throw new NotFoundException("Landlord not found");
     const [o] = await this.db.select().from(ownersTable)
       .where(and(eq(ownersTable.id, oid), eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)));
     if (!o) throw new NotFoundException("Landlord not found");
@@ -357,6 +420,7 @@ class LandlordMobileController {
   @Get("payments")
   async payments(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const rows = await this.db
       .select({
         id: paymentsTable.id, amount: paymentsTable.amount, dueDate: paymentsTable.dueDate,
@@ -367,7 +431,8 @@ class LandlordMobileController {
       })
       .from(paymentsTable)
       .leftJoin(contractsTable, eq(contractsTable.id, paymentsTable.contractId))
-      .where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)))
+      .where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(paymentsTable.contractId, scope.contractIds)] : [])))
       .orderBy(desc(paymentsTable.dueDate));
 
     // Full collection log per payment — each collection with its evidence
@@ -425,11 +490,13 @@ class LandlordMobileController {
   @Get("invoices")
   async invoices(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const rows = await this.db.select().from(simpleInvoicesTable)
       .where(and(
         eq(simpleInvoicesTable.userId, uid),
         eq(simpleInvoicesTable.status, "confirmed"),
         isNull(simpleInvoicesTable.deletedAt),
+        ...(scope.contractIds ? [inArray(simpleInvoicesTable.contractId, scope.contractIds)] : []),
       ))
       .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id)).limit(300);
     if (!rows.length) return [];
@@ -486,8 +553,10 @@ class LandlordMobileController {
   @Get("invoices/:id/pdf")
   async invoicePdf(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const [r] = await this.db.select({ id: simpleInvoicesTable.id, pdfKey: simpleInvoicesTable.pdfKey }).from(simpleInvoicesTable)
-      .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, uid), isNull(simpleInvoicesTable.deletedAt)));
+      .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, uid), isNull(simpleInvoicesTable.deletedAt),
+        ...(scope.contractIds ? [inArray(simpleInvoicesTable.contractId, scope.contractIds)] : [])));
     if (!r) throw new NotFoundException("Invoice not found");
     const key = (r as any).pdfKey as string | null;
     return { url: key ? await this.sign(key) : null, pdfKey: key ?? null };
@@ -498,8 +567,10 @@ class LandlordMobileController {
   @Get("reports")
   async reports(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const props = await this.db.select({ id: propertiesTable.id, name: propertiesTable.name, totalUnits: propertiesTable.totalUnits })
-      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+      .from(propertiesTable).where(and(eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt),
+        ...(scope.propIds ? [inArray(propertiesTable.id, scope.propIds)] : [])));
     const propIds = props.map((p) => p.id);
     const units = propIds.length
       ? await this.db.select({ propertyId: unitsTable.propertyId, status: unitsTable.status })
@@ -509,11 +580,13 @@ class LandlordMobileController {
     const rented = units.filter((u) => u.status === "rented").length;
 
     const contracts = await this.db.select({ status: contractsTable.status, monthlyRent: contractsTable.monthlyRent })
-      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+      .from(contractsTable).where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])));
     const monthlyRecurring = contracts.filter((c) => c.status === "active").reduce((s, c) => s + this.num(c.monthlyRent), 0);
 
     const payments = await this.db.select({ amount: paymentsTable.amount, dueDate: paymentsTable.dueDate, paidDate: paymentsTable.paidDate, status: paymentsTable.status, contractId: paymentsTable.contractId })
-      .from(paymentsTable).where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt)));
+      .from(paymentsTable).where(and(eq(paymentsTable.userId, uid), isNull(paymentsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(paymentsTable.contractId, scope.contractIds)] : [])));
 
     // contract → property
     const cIds = [...new Set(payments.map((p) => p.contractId).filter((x): x is number => !!x))];
@@ -569,6 +642,7 @@ class LandlordMobileController {
   @Get("maintenance")
   async maintenance(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const rows = await this.db.select({
       id: maintenanceRequestsTable.id, unitLabel: maintenanceRequestsTable.unitLabel,
       description: maintenanceRequestsTable.description, priority: maintenanceRequestsTable.priority,
@@ -578,7 +652,8 @@ class LandlordMobileController {
     }).from(maintenanceRequestsTable)
       .leftJoin(tenantsTable, eq(tenantsTable.id, maintenanceRequestsTable.tenantId))
       .leftJoin(contractsTable, eq(contractsTable.id, maintenanceRequestsTable.contractId))
-      .where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt)))
+      .where(and(eq(maintenanceRequestsTable.userId, uid), isNull(maintenanceRequestsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(maintenanceRequestsTable.contractId, scope.contractIds)] : [])))
       .orderBy(desc(maintenanceRequestsTable.createdAt));
     return rows.map((r) => ({ ...r, estimatedCost: r.estimatedCost != null ? this.num(r.estimatedCost) : null }));
   }
@@ -587,6 +662,7 @@ class LandlordMobileController {
   @Get("collections")
   async collections(@CurrentUser() user: AuthUser) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     return this.db
       .select({
         id: paymentCollectionsTable.id, amount: paymentCollectionsTable.amount,
@@ -597,7 +673,8 @@ class LandlordMobileController {
       .from(paymentCollectionsTable)
       .leftJoin(paymentsTable, eq(paymentsTable.id, paymentCollectionsTable.paymentId))
       .leftJoin(contractsTable, eq(contractsTable.id, paymentsTable.contractId))
-      .where(eq(paymentCollectionsTable.userId, uid))
+      .where(and(eq(paymentCollectionsTable.userId, uid),
+        ...(scope.contractIds ? [inArray(paymentsTable.contractId, scope.contractIds)] : [])))
       .orderBy(desc(paymentCollectionsTable.collectedDate))
       .limit(200);
   }
@@ -608,7 +685,8 @@ class LandlordMobileController {
     const uid = scopeId(user);
     const pid = parseInt(id, 10);
     const [p] = await this.db.select().from(propertiesTable)
-      .where(and(eq(propertiesTable.id, pid), eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt)));
+      .where(and(eq(propertiesTable.id, pid), eq(propertiesTable.userId, uid), isNull(propertiesTable.deletedAt),
+        ...(user.ownerScopeId != null ? [eq(propertiesTable.ownerId, user.ownerScopeId)] : [])));
     if (!p) throw new NotFoundException("Property not found");
     const units = await this.db.select().from(unitsTable)
       .where(and(eq(unitsTable.propertyId, pid), isNull(unitsTable.deletedAt))).orderBy(unitsTable.unitNumber);
@@ -676,7 +754,8 @@ class LandlordMobileController {
     const [row] = await this.db
       .select({ unit: unitsTable, propertyName: propertiesTable.name, propertyId: propertiesTable.id, propertyUsageLookupId: propertiesTable.usageLookupId })
       .from(unitsTable).innerJoin(propertiesTable, eq(propertiesTable.id, unitsTable.propertyId))
-      .where(and(eq(unitsTable.id, unitId), eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt)));
+      .where(and(eq(unitsTable.id, unitId), eq(propertiesTable.userId, uid), isNull(unitsTable.deletedAt),
+        ...(user.ownerScopeId != null ? [eq(propertiesTable.ownerId, user.ownerScopeId)] : [])));
     if (!row) throw new NotFoundException("Unit not found");
     const [cu] = await this.db
       .select({ id: contractsTable.id, contractNumber: contractsTable.contractNumber, status: contractsTable.status,
@@ -737,6 +816,7 @@ class LandlordMobileController {
   @Get("tenants/:id")
   async tenant(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const uid = scopeId(user);
+    const scope = await this.ownerScope(user);
     const tid = parseInt(id, 10);
     const [t] = await this.db.select().from(tenantsTable)
       .where(and(eq(tenantsTable.id, tid), eq(tenantsTable.userId, uid), isNull(tenantsTable.deletedAt)));
@@ -748,8 +828,13 @@ class LandlordMobileController {
       monthlyRent: contractsTable.monthlyRent, startDate: contractsTable.startDate, endDate: contractsTable.endDate,
       tenantPhone: contractsTable.tenantPhone, tenantId: contractsTable.tenantId,
     }).from(contractsTable)
-      .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)))
+      .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])))
       .orderBy(desc(contractsTable.createdAt));
+    // Owner scope: the tenant must be referenced by one of the owner's contracts.
+    if (scope.contractIds != null && !contractsRaw.some((c) => c.tenantId === tid)) {
+      throw new NotFoundException("Tenant not found");
+    }
     const contracts = contractsRaw.filter((c) => c.tenantId === tid || (phoneCore && (c.tenantPhone || "").replace(/\D/g, "").slice(-9) === phoneCore));
     const cids = contracts.map((c) => c.id);
     const cu = cids.length
@@ -778,8 +863,10 @@ class LandlordMobileController {
   async contract(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const uid = scopeId(user);
     const cid = parseInt(id, 10);
+    const scope = await this.ownerScope(user);
     const [c] = await this.db.select().from(contractsTable)
-      .where(and(eq(contractsTable.id, cid), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+      .where(and(eq(contractsTable.id, cid), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt),
+        ...(scope.contractIds ? [inArray(contractsTable.id, scope.contractIds)] : [])));
     if (!c) throw new NotFoundException("Contract not found");
     const cu: any[] = await this.db.select({
       unitId: unitsTable.id, unitNumber: unitsTable.unitNumber, unitStatus: unitsTable.status,
