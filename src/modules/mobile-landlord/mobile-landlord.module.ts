@@ -861,11 +861,22 @@ class LandlordMobileController {
       units: cu,
       deed,
       additionalFees: (c.additionalFees as any) ?? [],
-      payments: pays.map((p) => ({
-        id: p.id, amount: this.num(p.amount), dueDate: p.dueDate, paidDate: p.paidDate, status: p.status,
-        receiptNumber: p.receiptNumber, description: p.description,
-        collectedAmount: Math.round((collected.get(p.id) ?? 0) * 100) / 100,
-      })),
+      payments: pays.map((p) => {
+        const amount = this.num(p.amount);
+        const coll = Math.round((collected.get(p.id) ?? 0) * 100) / 100;
+        // Derive the live status from collections + due date (so a future
+        // installment reads as upcoming/pending, not overdue).
+        let status = p.status as string;
+        if (status !== "paid" && status !== "cancelled" && status !== "settled_external") {
+          if (amount > 0 && coll >= amount - 0.01) status = "paid";
+          else if (coll > 0.01) status = "partially_paid";
+          else status = p.dueDate && p.dueDate < new Date().toISOString().slice(0, 10) ? "overdue" : "pending";
+        }
+        return {
+          id: p.id, amount, dueDate: p.dueDate, paidDate: p.paidDate, status,
+          receiptNumber: p.receiptNumber, description: p.description, collectedAmount: coll,
+        };
+      }),
     };
   }
 }
