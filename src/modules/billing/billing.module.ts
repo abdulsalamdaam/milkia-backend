@@ -453,6 +453,9 @@ class SimpleInvoicesController {
         .limit(1);
       vatReg = !!(defOwner?.tax && String(defOwner.tax).trim());
     }
+    // Business rule: a property-management commission invoice ALWAYS carries
+    // 15% VAT, regardless of the seller's VAT-registration status.
+    vatReg = true;
 
     // Commission base = pre-VAT RENT only. Rent installments have a null
     // description; service-fee installments carry a name and are excluded.
