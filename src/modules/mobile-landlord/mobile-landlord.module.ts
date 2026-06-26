@@ -391,13 +391,27 @@ class LandlordMobileController {
       receiptsByPayment.set(c.paymentId, list);
     }
 
-    const data = rows.map((r) => ({
-      id: r.id, amount: this.num(r.amount), dueDate: r.dueDate, paidDate: r.paidDate,
-      status: r.status, receiptNumber: r.receiptNumber, description: r.description,
-      contractNumber: r.contractNumber, tenantName: r.tenantName,
-      collectedAmount: Math.round((collMap.get(r.id) ?? 0) * 100) / 100,
-      receipts: receiptsByPayment.get(r.id) ?? [],
-    }));
+    // Derive the live status from what's actually been collected (+ due date),
+    // so a settled installment never lingers as "overdue" because a collection
+    // didn't stamp the row. Stored paid/cancelled/settled are kept as-is.
+    const today = new Date().toISOString().slice(0, 10);
+    const data = rows.map((r) => {
+      const amount = this.num(r.amount);
+      const collected = Math.round((collMap.get(r.id) ?? 0) * 100) / 100;
+      let status = r.status as string;
+      if (status !== "paid" && status !== "cancelled" && status !== "settled_external") {
+        if (amount > 0 && collected >= amount - 0.01) status = "paid";
+        else if (collected > 0.01) status = "partially_paid";
+        else status = r.dueDate && r.dueDate < today ? "overdue" : "pending";
+      }
+      return {
+        id: r.id, amount, dueDate: r.dueDate, paidDate: r.paidDate,
+        status, receiptNumber: r.receiptNumber, description: r.description,
+        contractNumber: r.contractNumber, tenantName: r.tenantName,
+        collectedAmount: collected,
+        receipts: receiptsByPayment.get(r.id) ?? [],
+      };
+    });
     const summary = {
       paid: data.filter((d) => d.status === "paid").reduce((s, d) => s + d.amount, 0),
       pending: data.filter((d) => d.status === "pending").reduce((s, d) => s + d.amount, 0),

@@ -259,11 +259,22 @@ export class TenantPortalController {
       });
       byPayment.set(c.paymentId, list);
     }
+    // Derive the live status from what's actually been collected (+ due date),
+    // so a settled installment never lingers as "overdue".
+    const today = new Date().toISOString().slice(0, 10);
     return rows.map((r) => {
       const receipts = byPayment.get(r.id) ?? [];
+      const amount = this.num(r.amount);
+      const collected = Math.round(receipts.reduce((s, x) => s + x.amount, 0) * 100) / 100;
+      let status = r.status as string;
+      if (status !== "paid" && status !== "cancelled" && status !== "settled_external") {
+        if (amount > 0 && collected >= amount - 0.01) status = "paid";
+        else if (collected > 0.01) status = "partially_paid";
+        else status = r.dueDate && r.dueDate < today ? "overdue" : "pending";
+      }
       // `amount` kept as the original string for client compatibility; the
       // collected total + receipts are added alongside.
-      return { ...r, collectedAmount: receipts.reduce((s, x) => s + x.amount, 0), receipts };
+      return { ...r, status, collectedAmount: collected, receipts };
     });
   }
 
