@@ -434,30 +434,24 @@ class LandlordMobileController {
       .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id)).limit(300);
     if (!rows.length) return [];
 
-    // Seller identity = the account company (for the QR + the document header).
-    const [u] = await this.db.select({ companyId: usersTable.companyId }).from(usersTable).where(eq(usersTable.id, uid));
-    let sellerName: string | null = null, sellerVat: string | null = null;
-    let seller: { name: string | null; vatNumber: string | null; phone: string | null; address: string | null } = { name: null, vatNumber: null, phone: null, address: null };
-    if (u?.companyId) {
-      const [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, u.companyId));
-      sellerName = co?.name ?? null; sellerVat = co?.vatNumber ?? null;
-      seller = {
-        name: co?.name ?? null, vatNumber: co?.vatNumber ?? null, phone: (co as any)?.companyPhone ?? null,
-        address: co ? [(co as any).address, (co as any).district, (co as any).city].filter(Boolean).join("، ") || null : null,
-      };
-    }
-    // Individual account (no company) → seller identity is the default landlord owner.
-    if (!seller.name) {
-      const [owner] = await this.db.select().from(ownersTable)
-        .where(and(eq(ownersTable.userId, uid), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt))).limit(1);
-      if (owner) {
-        sellerName = sellerName ?? owner.name; sellerVat = sellerVat ?? (owner as any).taxNumber ?? null;
-        seller = {
-          name: owner.name ?? null, vatNumber: (owner as any).taxNumber ?? null,
-          phone: (owner as any).phone ?? null, address: (owner as any).address ?? null,
-        };
-      }
-    }
+    // Seller identity = the account: company → default landlord owner → the
+    // user's own profile (matches the web's fallback chain), so the seller
+    // block is never blank.
+    const [u] = await this.db.select({ companyId: usersTable.companyId, name: usersTable.name, email: usersTable.email, phone: usersTable.phone })
+      .from(usersTable).where(eq(usersTable.id, uid));
+    const [owner] = await this.db.select().from(ownersTable)
+      .where(and(eq(ownersTable.userId, uid), eq(ownersTable.isDefault, true), isNull(ownersTable.deletedAt))).limit(1);
+    let co: typeof companiesTable.$inferSelect | undefined;
+    if (u?.companyId) [co] = await this.db.select().from(companiesTable).where(eq(companiesTable.id, u.companyId));
+    const pick = (...v: (string | null | undefined)[]) => v.find((x) => x && String(x).trim()) ?? null;
+    const companyAddress = co ? [(co as any).address, (co as any).district, (co as any).city].filter(Boolean).join("، ") || null : null;
+    const seller = {
+      name: pick(co?.name, owner?.name, u?.name),
+      vatNumber: pick(co?.vatNumber, (owner as any)?.taxNumber),
+      phone: pick((co as any)?.companyPhone, (owner as any)?.phone, u?.phone),
+      address: pick(companyAddress, (owner as any)?.address),
+    };
+    const sellerName = seller.name, sellerVat = seller.vatNumber;
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
     return Promise.all(rows.map(async (r) => {
