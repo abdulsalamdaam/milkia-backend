@@ -667,6 +667,22 @@ class SimpleInvoicesController {
    * that invoice's installment — so the original invoice becomes the
    * corrected one (مُعدَّلة وليست جديدة).
    */
+  /** Persist the storage key of the PDF the web rendered for this document so
+   *  the mobile app can download the exact same file. The web uploads the PDF
+   *  via /api/uploads (→ key) then calls this on approve / voucher creation. */
+  @Post(":id/pdf-key")
+  @RequirePermissions(PERMISSIONS.INVOICES_WRITE)
+  async setPdfKey(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {
+    const uid = scopeId(user);
+    const key = typeof body?.key === "string" ? body.key.trim() : "";
+    if (!key) throw new BadRequestException("key is required");
+    const [updated] = await this.db.update(simpleInvoicesTable).set({ pdfKey: key } as any)
+      .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, uid), isNull(simpleInvoicesTable.deletedAt)))
+      .returning({ id: simpleInvoicesTable.id });
+    if (!updated) throw new NotFoundException("Document not found");
+    return { ok: true };
+  }
+
   @Post(":id/approve")
   @RequirePermissions(PERMISSIONS.INVOICES_WRITE)
   async approve(@CurrentUser() user: AuthUser, @Param("id") id: string, @Body() body: any) {

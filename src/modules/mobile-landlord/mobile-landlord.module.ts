@@ -1,4 +1,4 @@
-import { Controller, Get, Inject, Module, NotFoundException, Param, Query, UseGuards } from "@nestjs/common";
+import { Controller, Get, Inject, Module, NotFoundException, Param, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq, isNull, inArray, desc, sql } from "drizzle-orm";
 import {
@@ -14,9 +14,6 @@ import { scopeId } from "../../common/scope";
 import { attachLookupLabels } from "../../common/lookups-resolve";
 import { invoiceQrSvg } from "../../common/zatca-qr";
 import { UploadsService } from "../uploads/uploads.service";
-import { PdfService } from "../invoice/services/pdf.service";
-import { ShellService } from "../invoice/services/shell.service";
-import { buildSimpleInvoiceHtml } from "../invoice/services/simple-invoice-html";
 
 /**
  * Landlord mobile API — READ ONLY. Mirrors the tenant-portal shape but for a
@@ -29,7 +26,7 @@ import { buildSimpleInvoiceHtml } from "../invoice/services/simple-invoice-html"
 @Controller("landlord/me")
 @UseGuards(JwtAuthGuard)
 class LandlordMobileController {
-  constructor(@Inject(DRIZZLE) private readonly db: Drizzle, private readonly uploads: UploadsService, private readonly pdf: PdfService) {}
+  constructor(@Inject(DRIZZLE) private readonly db: Drizzle, private readonly uploads: UploadsService) {}
 
   private num(s: string | null | undefined) { return parseFloat(s || "0") || 0; }
   /** Resolve a stored object key to a short-lived signed URL (or null). */
@@ -482,49 +479,18 @@ class LandlordMobileController {
     return { seller, sellerName: seller.name, sellerVat: seller.vatNumber };
   }
 
-  /** Render an invoice / receipt voucher to the SAME PDF the web prints
-   *  (headless Chromium), store it, and return a short-lived signed URL the
-   *  app opens/downloads. `?voucher=1` forces the receipt-voucher document. */
+  /** Return a short-lived signed URL to the PDF the web generated + stored on
+   *  this invoice/voucher (pixel-identical to what the web prints). The web
+   *  uploads it when the document is approved / the voucher is created; until
+   *  then `url` is null and the app shows "not generated yet". */
   @Get("invoices/:id/pdf")
-  async invoicePdf(@CurrentUser() user: AuthUser, @Param("id") id: string, @Query("voucher") voucher: string | undefined, @Query("lang") lang: string | undefined) {
+  async invoicePdf(@CurrentUser() user: AuthUser, @Param("id") id: string) {
     const uid = scopeId(user);
-    const [r] = await this.db.select().from(simpleInvoicesTable)
+    const [r] = await this.db.select({ id: simpleInvoicesTable.id, pdfKey: simpleInvoicesTable.pdfKey }).from(simpleInvoicesTable)
       .where(and(eq(simpleInvoicesTable.id, parseInt(id, 10)), eq(simpleInvoicesTable.userId, uid), isNull(simpleInvoicesTable.deletedAt)));
     if (!r) throw new NotFoundException("Invoice not found");
-    const { seller, sellerName, sellerVat } = await this.accountSeller(uid);
-    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-    const subtotal = this.num(r.subtotal), total = this.num(r.total), vat = round2(total - subtotal);
-    const isVoucher = r.kind === "receipt" || r.kind === "deposit";
-    const wantVoucher = isVoucher || voucher === "1";
-    // The canonical rendering (voucher for kind=receipt, invoice otherwise) is
-    // cached on the row; a collected-invoice-as-voucher variant is regenerated.
-    const isPrimary = wantVoucher === isVoucher;
-    if (isPrimary && (r as any).pdfKey) {
-      const cached = await this.sign((r as any).pdfKey);
-      if (cached) return { url: cached, pdfKey: (r as any).pdfKey };
-    }
-    const buyerVat = (r.client as any)?.vatNumber ?? null;
-    const qrSvg = !isVoucher && vat > 0.01
-      ? invoiceQrSvg({ sellerName, vatNumber: sellerVat, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
-      : null;
-    const ar = lang !== "en";
-    const html = buildSimpleInvoiceHtml({
-      number: r.number, type: r.type, isVoucher, buyerHasVat: !!buyerVat,
-      subtotal, total, vat, items: (r.items as any) ?? [],
-      issueDate: r.issueDate, dueDate: r.dueDate, paidDate: r.paidDate,
-      receiptNumber: r.receiptNumber, billingReference: r.billingReference, notes: r.notes,
-      seller, buyer: { name: r.tenantName ?? null, vatNumber: buyerVat, phone: (r.client as any)?.phone ?? null, address: (r.client as any)?.address ?? null },
-      qrSvg,
-    }, ar, voucher === "1");
-    const pdf = await this.pdf.htmlToPdf(html);
-    const fileName = (wantVoucher ? (r.receiptNumber || r.number) : r.number) || "document";
-    const { key } = await this.uploads.upload(
-      { buffer: pdf, originalname: `${fileName}.pdf`, mimetype: "application/pdf", size: pdf.length },
-      { folder: `invoice-pdf/${uid}` },
-    );
-    // Persist the cached key on the row so it's findable + reused next time.
-    if (isPrimary) await this.db.update(simpleInvoicesTable).set({ pdfKey: key } as any).where(eq(simpleInvoicesTable.id, r.id));
-    return { url: await this.sign(key), pdfKey: key };
+    const key = (r as any).pdfKey as string | null;
+    return { url: key ? await this.sign(key) : null, pdfKey: key ?? null };
   }
 
   /** Reports: headline stats, a 6-month collected-vs-expected series, and
@@ -927,5 +893,5 @@ class LandlordMobileController {
   }
 }
 
-@Module({ controllers: [LandlordMobileController], providers: [ShellService, PdfService] })
+@Module({ controllers: [LandlordMobileController] })
 export class MobileLandlordModule {}
