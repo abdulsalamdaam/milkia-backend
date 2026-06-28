@@ -560,21 +560,80 @@ class LandlordMobileController {
       .orderBy(desc(simpleInvoicesTable.issueDate), desc(simpleInvoicesTable.id)).limit(300);
     if (!rows.length) return [];
 
-    const { seller, sellerName, sellerVat } = await this.accountSeller(uid);
+    const account = await this.accountSeller(uid);
     const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    const pick = (...v: (string | null | undefined)[]) => v.find((x) => x && String(x).trim()) ?? null;
+
+    // Batch-load the supporting records so seller/buyer can be enriched with the
+    // same fallback chain the web uses (no N+1).
+    const contractIds = [...new Set(rows.map((r) => r.contractId).filter((x): x is number => x != null))];
+    const tenantIds = [...new Set(rows.map((r) => r.tenantId).filter((x): x is number => x != null))];
+    const contractsById = new Map<number, any>();
+    if (contractIds.length) {
+      const cs = await this.db.select({
+        id: contractsTable.id, tenantName: contractsTable.tenantName, tenantPhone: contractsTable.tenantPhone,
+        tenantTaxNumber: contractsTable.tenantTaxNumber, tenantAddress: contractsTable.tenantAddress,
+        landlordName: contractsTable.landlordName, landlordIdNumber: contractsTable.landlordIdNumber,
+        landlordPhone: contractsTable.landlordPhone, landlordEmail: contractsTable.landlordEmail,
+        landlordTaxNumber: contractsTable.landlordTaxNumber, landlordAddress: contractsTable.landlordAddress,
+      }).from(contractsTable).where(and(eq(contractsTable.userId, uid), inArray(contractsTable.id, contractIds)));
+      for (const c of cs) contractsById.set(c.id, c);
+    }
+    const tenantsById = new Map<number, any>();
+    if (tenantIds.length) {
+      const ts = await this.db.select({
+        id: tenantsTable.id, name: tenantsTable.name, taxNumber: tenantsTable.taxNumber,
+        phone: tenantsTable.phone, email: tenantsTable.email, address: tenantsTable.address,
+      }).from(tenantsTable).where(and(eq(tenantsTable.userId, uid), inArray(tenantsTable.id, tenantIds)));
+      for (const t of ts) tenantsById.set(t.id, t);
+    }
+    const owners = await this.db.select({
+      name: ownersTable.name, idNumber: ownersTable.idNumber, taxNumber: ownersTable.taxNumber,
+      phone: ownersTable.phone, email: ownersTable.email, address: ownersTable.address,
+    }).from(ownersTable).where(and(eq(ownersTable.userId, uid), isNull(ownersTable.deletedAt)));
 
     return Promise.all(rows.map(async (r) => {
       const subtotal = this.num(r.subtotal), total = this.num(r.total), vat = round2(total - subtotal);
       const isVoucher = r.kind === "receipt" || r.kind === "deposit";
+      const isCommission = r.kind === "commission";
+      const contract = r.contractId != null ? contractsById.get(r.contractId) : null;
+      const tenant = r.tenantId != null ? tenantsById.get(r.tenantId) : null;
+
+      // Seller: commission → the account; rent/fee → the contract's landlord
+      // enriched per-field from the matched owner record, falling back to the
+      // account. Mirrors the web's seller binding.
+      let seller = account.seller;
+      if (!isCommission && contract) {
+        const owner = owners.find((o) =>
+          (contract.landlordIdNumber && o.idNumber && o.idNumber === contract.landlordIdNumber) ||
+          (contract.landlordName && o.name === contract.landlordName));
+        seller = {
+          name: pick(contract.landlordName, owner?.name, account.seller.name),
+          vatNumber: pick(contract.landlordTaxNumber, owner?.taxNumber, account.seller.vatNumber),
+          phone: pick(contract.landlordPhone, owner?.phone, account.seller.phone),
+          email: pick(contract.landlordEmail, owner?.email, account.seller.email),
+          address: pick(contract.landlordAddress, owner?.address, account.seller.address),
+        };
+      }
+
+      // Buyer: the invoice client snapshot, then the live tenant, then the
+      // contract snapshot — so VAT / phone / address are never wrongly null.
+      const buyerVat = pick((r.client as any)?.vatNumber, tenant?.taxNumber, contract?.tenantTaxNumber);
+      const buyer = {
+        name: pick(r.tenantName, tenant?.name, contract?.tenantName),
+        vatNumber: buyerVat,
+        phone: pick((r.client as any)?.phone, tenant?.phone, contract?.tenantPhone),
+        email: pick((r.client as any)?.email, tenant?.email),
+        address: pick((r.client as any)?.address, tenant?.address, contract?.tenantAddress),
+      };
+
       const qrSvg = !isVoucher && vat > 0.01
-        ? invoiceQrSvg({ sellerName, vatNumber: sellerVat, issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
+        ? invoiceQrSvg({ sellerName: seller.name ?? "", vatNumber: seller.vatNumber ?? "", issueDate: r.issueDate, totalWithVat: total, vatTotal: vat })
         : null;
-      const buyerVat = (r.client as any)?.vatNumber ?? null;
       return {
         id: r.id, number: r.number, type: r.type, kind: r.kind, isVoucher, buyerHasVat: !!buyerVat,
-        buyerName: r.tenantName ?? null,
-        seller,
-        buyer: { name: r.tenantName ?? null, vatNumber: buyerVat, phone: (r.client as any)?.phone ?? null, address: (r.client as any)?.address ?? null },
+        buyerName: buyer.name,
+        seller, buyer,
         subtotal, total, vat, status: r.status,
         issueDate: r.issueDate, dueDate: r.dueDate, paidDate: r.paidDate,
         receiptNumber: r.receiptNumber, paymentMethod: r.paymentMethod, billingReference: r.billingReference,
