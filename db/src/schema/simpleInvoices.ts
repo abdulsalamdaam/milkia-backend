@@ -44,6 +44,14 @@ export const simpleInvoicesTable = pgTable("simple_invoices", {
   // Rendered PDF of the document (MinIO key) — generated on first download so
   // the file is cached/persisted rather than regenerated every time.
   pdfKey: text("pdf_key"),
+  // ZATCA e-invoicing outcome for this document, set on approval:
+  //   cleared   — standard (B2B) invoice accepted by ZATCA clearance
+  //   reported  — simplified (B2C) invoice reported to ZATCA
+  //   skipped   — not required (exempt / out-of-scope supply, e.g. residential rent)
+  //   failed    — submission attempted but ZATCA rejected it (see zatcaError)
+  //   null      — not applicable / never attempted
+  zatcaStatus: text("zatca_status"),
+  zatcaError: text("zatca_error"),
   // Receipt-voucher number, stamped when an invoice is confirmed.
   receiptNumber: text("receipt_number"),
   // For credit/debit notes — the original invoice number being adjusted.

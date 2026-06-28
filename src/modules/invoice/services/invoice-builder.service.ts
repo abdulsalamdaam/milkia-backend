@@ -261,8 +261,11 @@ export class InvoiceBuilderService {
 
     // Non-standard categories (E/Z/O) MUST carry a tax-exemption reason or ZATCA
     // rejects the document. Map each to its KSA reason code.
+    // KSA VAT exemption-reason codes. This is a property-management product, so
+    // an Exempt (E) supply is residential real-estate leasing → Article 30
+    // (VATEX-SA-30). Zero-rated/out-of-scope keep their general codes.
     const EXEMPTION: Record<string, { code: string; text: string }> = {
-      E: { code: "VATEX-SA-29", text: "Financial services mentioned in Article 29 of the VAT Regulations" },
+      E: { code: "VATEX-SA-30", text: "Real estate transactions exempt from VAT under Article 30 of the VAT Regulations" },
       Z: { code: "VATEX-SA-32", text: "Export of goods" },
       O: { code: "VATEX-SA-OOS", text: "Not subject to VAT" },
     };

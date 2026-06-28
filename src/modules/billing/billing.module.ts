@@ -36,7 +36,7 @@ type LineItem = { description: string; quantity: number; unitPrice: number; amou
 /** Result of the best-effort ZATCA mirror on approval — surfaced to the UI. */
 type ZatcaSubmitOutcome =
   | { submitted: true; status: string; profile: string; environment: string; httpStatus: number; invoiceId: number; warnings: number }
-  | { submitted: false; code: "not_linked" | "not_onboarded" | "no_items" | "skipped" | "error"; reason: string };
+  | { submitted: false; code: "not_linked" | "not_onboarded" | "no_items" | "skipped" | "not_required" | "error"; reason: string };
 
 function normalizeItems(raw: any): LineItem[] {
   if (!Array.isArray(raw)) return [];
@@ -760,6 +760,30 @@ class SimpleInvoicesController {
     return { zatca };
   }
 
+  /** Run the ZATCA submission, then persist a concise outcome (status + error)
+   *  on the document so clearance / reporting / skip / failure is visible in
+   *  the app instead of vanishing. */
+  private async submitApprovedDocToZatca(uid: number, doc: any): Promise<ZatcaSubmitOutcome> {
+    const outcome = await this.runZatcaSubmission(uid, doc);
+    try {
+      const o = outcome as any;
+      let status: string;
+      let error: string | null = null;
+      if (o.submitted) {
+        status = o.profile === "standard" ? "cleared" : "reported";
+      } else {
+        status = o.code === "error" ? "failed"
+          : (o.code === "not_linked" || o.code === "not_onboarded") ? "pending"
+          : "skipped";
+        error = o.reason ?? null;
+      }
+      await this.db.update(simpleInvoicesTable)
+        .set({ zatcaStatus: status, zatcaError: error } as any)
+        .where(and(eq(simpleInvoicesTable.id, Number(doc.id)), eq(simpleInvoicesTable.userId, uid)));
+    } catch { /* status persistence is best-effort — never block approval */ }
+    return outcome;
+  }
+
   /**
    * Best-effort: mirror an approved billing document to ZATCA under the
    * property's landlord (the per-landlord seller), IF that landlord is onboarded
@@ -767,7 +791,7 @@ class SimpleInvoicesController {
    * duplicate number, validation, outage) must not block the approval. The
    * landlord's seller gets a real signed, submitted invoice on their side.
    */
-  private async submitApprovedDocToZatca(uid: number, doc: any): Promise<ZatcaSubmitOutcome> {
+  private async runZatcaSubmission(uid: number, doc: any): Promise<ZatcaSubmitOutcome> {
     try {
       // Commission invoices (فاتورة عمولة) are intentionally NOT sent to ZATCA.
       if (doc.kind === "commission") {
@@ -790,6 +814,15 @@ class SimpleInvoicesController {
 
       const lines = this.zatcaLinesFromDoc(doc);
       if (!lines.length) { this.logger.debug(`ZATCA: ${doc.number} skipped — no line items`); return { submitted: false, code: "no_items", reason: "No line items to invoice" }; }
+      // ZATCA e-invoicing is only required for TAXABLE supplies (standard 15% or
+      // zero-rated). A document whose lines are all Exempt (e.g. residential rent)
+      // or Out-of-scope is not required to be e-invoiced — skip cleanly instead of
+      // submitting an invalid 0-VAT document that ZATCA would reject.
+      const hasTaxable = lines.some((l) => l.vatCategory === "S" || l.vatCategory === "Z");
+      if (!hasTaxable) {
+        this.logger.debug(`ZATCA: ${doc.number} skipped — exempt/out-of-scope supply (no e-invoice required)`);
+        return { submitted: false, code: "not_required", reason: "Exempt or out-of-scope supply — ZATCA e-invoice not required" };
+      }
 
       // Buyer's full structured address comes from the tenant record (rent) or
       // the landlord/owner record (commission) — both store a national address —
@@ -863,18 +896,24 @@ class SimpleInvoicesController {
     return row?.ownerId ?? null;
   }
 
-  /** ZATCA invoice lines from a billing doc's items (15% S, or out-of-scope). */
+  /** ZATCA invoice lines from a billing doc's items. Each item may carry an
+   *  explicit ZATCA VAT category (S = standard 15%, Z = zero-rated, E = exempt,
+   *  O = out-of-scope). Legacy items only have a `vat` boolean: true → S; false
+   *  → E (exempt), the correct default for non-VAT property rent. */
   private zatcaLinesFromDoc(doc: any): InvoiceLineInput[] {
+    const VALID = ["S", "Z", "E", "O"] as const;
     return normalizeItems(doc.items).map((it, i) => {
       const quantity = it.quantity || 1;
       const unitPrice = it.unitPrice || (quantity ? round2(it.amount / quantity) : it.amount);
+      const raw = (it as any).vatCategory as string | undefined;
+      const category = (raw && (VALID as readonly string[]).includes(raw) ? raw : (it.vat ? "S" : "E")) as "S" | "Z" | "E" | "O";
       return {
         id: String(i + 1),
         name: it.description || "بند",
         quantity,
         unitPrice,
-        vatPercent: it.vat ? 15 : 0,
-        vatCategory: it.vat ? "S" : "O",
+        vatPercent: category === "S" ? 15 : 0,
+        vatCategory: category,
       } as InvoiceLineInput;
     });
   }

@@ -102,6 +102,12 @@ export async function ensureSchema(): Promise<void> {
     } catch (err: any) {
       log.warn(`ensure simple_invoices.pdf_key failed: ${err?.message || err}`);
     }
+    try {
+      await client.query(`alter table simple_invoices add column if not exists zatca_status text`);
+      await client.query(`alter table simple_invoices add column if not exists zatca_error text`);
+    } catch (err: any) {
+      log.warn(`ensure simple_invoices.zatca_status/zatca_error failed: ${err?.message || err}`);
+    }
 
     // Owner (landlord) push token columns — mirrors the tenants.fcm_* columns.
     try {
