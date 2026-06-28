@@ -110,6 +110,13 @@ class PackageController {
     const [owner] = await this.db.select().from(usersTable).where(eq(usersTable.id, ownerId));
     const mode = packageMode(owner?.packagePlan);
 
+    // Onboarding is a ONE-TIME account setup. Once the account is onboarded,
+    // this endpoint is an idempotent no-op — it must NEVER re-run setup or
+    // overwrite the account identity. Adding another landlord through an
+    // onboarding-mode wizard previously clobbered a managing account's name +
+    // phone with the new landlord's, and could rewrite its company/landlord.
+    if (owner?.onboardedAt != null) return { success: true, onboarded: true };
+
     const userPatch: any = { onboardedAt: new Date() };
     if (body?.name) userPatch.name = String(body.name).trim();
     if (body?.phone) userPatch.phone = String(body.phone).trim();
