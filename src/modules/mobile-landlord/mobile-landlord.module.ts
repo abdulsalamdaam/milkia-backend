@@ -54,16 +54,36 @@ class LandlordMobileController {
   private async ownerScope(user: AuthUser): Promise<{ propIds: number[] | null; contractIds: number[] | null }> {
     if (user.ownerScopeId == null) return { propIds: null, contractIds: null };
     const uid = scopeId(user);
+    const [owner] = await this.db.select({ name: ownersTable.name, idNumber: ownersTable.idNumber })
+      .from(ownersTable).where(and(eq(ownersTable.id, user.ownerScopeId), isNull(ownersTable.deletedAt)));
     const props = await this.db.select({ id: propertiesTable.id }).from(propertiesTable)
       .where(and(eq(propertiesTable.userId, uid), eq(propertiesTable.ownerId, user.ownerScopeId), isNull(propertiesTable.deletedAt)));
     const propIds = props.map((p) => p.id);
-    if (!propIds.length) return { propIds: [], contractIds: [] };
-    const cu = await this.db.selectDistinct({ contractId: contractsTable.id })
-      .from(contractUnitsTable)
-      .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
-      .innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
-      .where(and(inArray(unitsTable.propertyId, propIds), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
-    return { propIds, contractIds: cu.map((c) => c.contractId) };
+
+    const contractIds = new Set<number>();
+    // Active contracts: linked to the owner's properties via contract_units.
+    if (propIds.length) {
+      const cu = await this.db.selectDistinct({ contractId: contractsTable.id })
+        .from(contractUnitsTable)
+        .innerJoin(unitsTable, eq(unitsTable.id, contractUnitsTable.unitId))
+        .innerJoin(contractsTable, eq(contractsTable.id, contractUnitsTable.contractId))
+        .where(and(inArray(unitsTable.propertyId, propIds), eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt)));
+      cu.forEach((c) => contractIds.add(c.contractId));
+    }
+    // Terminated/cancelled contracts have their contract_units deleted (the units
+    // are freed on termination), so they'd vanish from the scope above. Recover
+    // them via the contract's stored landlord snapshot — by the unique id number
+    // when the owner has one, otherwise by name.
+    const idNum = owner?.idNumber?.trim();
+    const snap = idNum
+      ? eq(contractsTable.landlordIdNumber, idNum)
+      : (owner?.name?.trim() ? eq(contractsTable.landlordName, owner.name) : null);
+    if (snap) {
+      const rows = await this.db.select({ id: contractsTable.id }).from(contractsTable)
+        .where(and(eq(contractsTable.userId, uid), isNull(contractsTable.deletedAt), snap));
+      rows.forEach((r) => contractIds.add(r.id));
+    }
+    return { propIds, contractIds: [...contractIds] };
   }
   /** Resolve a stored object key to a short-lived signed URL (or null). */
   private async sign(key: string | null | undefined): Promise<string | null> {
