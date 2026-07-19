@@ -1,15 +1,17 @@
 // Map Ejar (JSON:API) payloads into this API's Contract shape.
 //
-// The UAT payloads carry many optional, snake_cased attributes and the exact
-// names vary between the ejar / ejarext products. Every accessor tries a list
-// of likely keys and falls back to null rather than throwing. READ-ONLY: this
-// only shapes what we pull for import + preview; nothing is pushed to NHC.
+// Field names verified against the real UAT `GetRentalContracts` payload:
+// dates are `start_time`/`end_time`, money is `total_value` /
+// `security_deposit_value`, and parties/units are INLINE arrays on
+// `attributes` (`tenants`, `lessors`, `units`) — not JSON:API relationships.
+// Every accessor still falls back across likely aliases so a shape change
+// degrades gracefully instead of throwing. READ-ONLY: nothing is pushed to NHC.
 
-import type { EjarBody, JsonApiRef, JsonApiResource } from "./ejar.types";
+import type { EjarBody, JsonApiResource } from "./ejar.types";
 
 type Attrs = Record<string, unknown>;
 
-function pick(attrs: Attrs | undefined, ...keys: string[]): string | null {
+function pick(attrs: Attrs | null | undefined, ...keys: string[]): string | null {
   if (!attrs) return null;
   for (const k of keys) {
     const v = attrs[k];
@@ -18,25 +20,25 @@ function pick(attrs: Attrs | undefined, ...keys: string[]): string | null {
   return null;
 }
 
-function resolve(body: EjarBody | undefined, ref: JsonApiRef | null | undefined): JsonApiResource | null {
-  if (!body?.included || !ref) return null;
-  return body.included.find((r) => r.type === ref.type && r.id === ref.id) ?? null;
-}
-
-function firstRel(res: JsonApiResource | undefined, name: string): JsonApiRef | null {
-  const rel = res?.relationships?.[name]?.data;
-  if (!rel) return null;
-  return Array.isArray(rel) ? (rel[0] ?? null) : rel;
+/** Pick a party from an inline `tenants`/`lessors` array, preferring a role. */
+function party(arr: unknown, preferRole: string): Attrs | null {
+  if (!Array.isArray(arr) || arr.length === 0) return null;
+  const items = arr as Attrs[];
+  return (
+    items.find((p) => String(p.role || "").toLowerCase() === preferRole) ||
+    items.find((p) => String(p.type || "").toLowerCase() === "individual") ||
+    items[0]
+  );
 }
 
 /** Coerce the many Ejar status spellings into our contract_status enum. */
 export function normalizeStatus(raw: string | null): string {
   const s = (raw || "").toLowerCase();
-  if (/active|نشط|ساري|current|valid/.test(s)) return "active";
+  if (/active|registered|نشط|ساري|current|valid/.test(s)) return "active";
   if (/expired|منتهي|ended/.test(s)) return "expired";
   if (/terminat|فسخ|منهي/.test(s)) return "terminated";
   if (/cancel|ملغ/.test(s)) return "cancelled";
-  if (/pend|draft|مسودة|قيد/.test(s)) return "pending";
+  if (/pend|draft|waiting|مسودة|قيد/.test(s)) return "pending";
   return "active";
 }
 
@@ -54,30 +56,21 @@ export interface EjarContractSummary {
   annualRent: string | null;
 }
 
-export function summarizeContract(res: JsonApiResource, body?: EjarBody): EjarContractSummary {
+export function summarizeContract(res: JsonApiResource): EjarContractSummary {
   const a = res.attributes || {};
-  const propertyRes = resolve(body, firstRel(res, "property")) || resolve(body, firstRel(res, "properties"));
-  const tenantRes =
-    resolve(body, firstRel(res, "tenant")) ||
-    resolve(body, firstRel(res, "lessee")) ||
-    resolve(body, firstRel(res, "party"));
-
+  const tenant = party(a.tenants, "tenant");
   return {
     id: res.id,
-    contractNumber: pick(a, "contract_number", "contractNumber", "number", "ejar_contract_number") || res.id,
+    contractNumber: pick(a, "contract_number", "contractNumber", "number") || res.id,
     contractType: pick(a, "contract_type", "contractType", "type", "rental_type"),
-    rawStatus: pick(a, "contract_status", "status", "contractStatus", "state"),
-    status: normalizeStatus(pick(a, "contract_status", "status", "contractStatus", "state")),
-    startDate: pick(a, "start_date", "startDate", "contract_start_date", "from_date"),
-    endDate: pick(a, "end_date", "endDate", "contract_end_date", "to_date"),
-    propertyName:
-      pick(a, "property_name", "propertyName", "property") ||
-      pick(propertyRes?.attributes, "name", "property_name", "title"),
-    tenantName:
-      pick(a, "tenant_name", "tenantName", "lessee_name", "tenant") ||
-      pick(tenantRes?.attributes, "name", "full_name", "party_name"),
-    monthlyRent: pick(a, "monthly_rent", "monthlyRent", "rent_amount", "monthly_amount"),
-    annualRent: pick(a, "annual_rent", "annualRent", "total_rent", "yearly_rent", "total_contract_value"),
+    rawStatus: pick(a, "status", "contract_status", "contractStatus", "state"),
+    status: normalizeStatus(pick(a, "status", "contract_status", "contractStatus", "state")),
+    startDate: pick(a, "start_time", "start_date", "startDate", "contract_start_date", "from_date"),
+    endDate: pick(a, "end_time", "end_date", "endDate", "contract_end_date", "to_date"),
+    propertyName: pick(a, "property_name", "propertyName", "property"),
+    tenantName: pick(tenant, "name", "full_name", "party_name") || pick(a, "tenant_name", "tenantName"),
+    monthlyRent: pick(a, "monthly_rent", "monthlyRent", "rent_amount", "installment_value"),
+    annualRent: pick(a, "total_value", "annual_rent", "annualRent", "total_contract_value", "yearly_rent"),
   };
 }
 
@@ -85,7 +78,7 @@ export function summarizeContractsBody(body: EjarBody): EjarContractSummary[] {
   const data = body.data;
   if (!data) return [];
   const arr = Array.isArray(data) ? data : [data];
-  return arr.map((r) => summarizeContract(r, body));
+  return arr.map((r) => summarizeContract(r));
 }
 
 export interface EjarInvoiceRow {
@@ -104,8 +97,8 @@ export function summarizeInvoices(body?: EjarBody | null): EjarInvoiceRow[] {
     return {
       id: r.id,
       number: pick(a, "invoice_number", "number", "invoiceNo", "reference"),
-      dueDate: pick(a, "due_date", "dueDate", "invoice_date", "date"),
-      amount: pick(a, "amount", "total", "invoice_amount", "value", "total_amount"),
+      dueDate: pick(a, "due_date", "dueDate", "invoice_date", "date", "due_time"),
+      amount: pick(a, "amount", "total", "invoice_amount", "value", "total_amount", "total_value"),
       status: pick(a, "status", "payment_status", "state"),
     };
   });
@@ -133,30 +126,23 @@ export interface EjarImportPreview {
 
 /** Assemble the mapped Contract + invoices + address for preview/import. */
 export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview {
-  const summary = summarizeContract(detail.contract, detail.listBody);
-  const c = detail.contract.attributes || {};
+  const summary = summarizeContract(detail.contract);
+  const a = detail.contract.attributes || {};
   const fin = firstResource(detail.financial)?.attributes || {};
   const na = firstResource(detail.nationalAddress)?.attributes || {};
 
-  const propertyRes =
-    resolve(detail.listBody, firstRel(detail.contract, "property")) ||
-    resolve(detail.listBody, firstRel(detail.contract, "properties"));
-  const tenantRes =
-    resolve(detail.listBody, firstRel(detail.contract, "tenant")) ||
-    resolve(detail.listBody, firstRel(detail.contract, "lessee"));
-  const lessorRes =
-    resolve(detail.listBody, firstRel(detail.contract, "lessor")) ||
-    resolve(detail.listBody, firstRel(detail.contract, "landlord")) ||
-    resolve(detail.listBody, firstRel(detail.contract, "owner"));
+  const tenant = party(a.tenants, "tenant") || {};
+  const lessor = party(a.lessors, "lessor") || {};
+  const region = (a.region && typeof a.region === "object" ? (a.region as Attrs) : {}) as Attrs;
 
   const nationalAddress = {
     buildingNumber: pick(na, "building_number", "buildingNumber", "building_no"),
     street: pick(na, "street", "street_name", "streetName"),
     district: pick(na, "district", "district_name", "neighborhood"),
-    city: pick(na, "city", "city_name"),
+    city: pick(na, "city", "city_name") || pick(region, "name_ar", "name_en"),
     postalCode: pick(na, "postal_code", "postalCode", "zip_code", "zip"),
     additionalNumber: pick(na, "additional_number", "additionalNumber", "secondary_number"),
-    region: pick(na, "region", "region_name"),
+    region: pick(region, "name_ar", "name_en") || pick(na, "region", "region_name"),
   };
 
   const contract: Record<string, unknown> = {
@@ -166,19 +152,22 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
     startDate: summary.startDate,
     endDate: summary.endDate,
     status: summary.status,
-    monthlyRent: summary.monthlyRent || pick(fin, "monthly_rent", "monthlyRent", "rent_amount", "monthly_amount"),
-    annualRent: summary.annualRent || pick(fin, "annual_rent", "annualRent", "total_rent", "total_contract_value"),
-    depositAmount: pick(c, "deposit", "deposit_amount", "security_deposit") || pick(fin, "deposit", "deposit_amount"),
-    paymentFrequency: pick(c, "payment_frequency", "paymentFrequency", "payment_cycle", "installment_frequency"),
-    tenantName: summary.tenantName || pick(tenantRes?.attributes, "name", "full_name", "party_name"),
-    tenantIdNumber: pick(tenantRes?.attributes, "id_number", "national_id", "identity_number") || pick(c, "tenant_id_number"),
-    tenantPhone: pick(tenantRes?.attributes, "phone", "mobile", "mobile_number"),
-    tenantEmail: pick(tenantRes?.attributes, "email"),
-    landlordName: pick(lessorRes?.attributes, "name", "full_name", "party_name") || pick(c, "lessor_name", "landlord_name"),
-    landlordIdNumber: pick(lessorRes?.attributes, "id_number", "national_id", "identity_number") || pick(c, "lessor_id_number"),
-    landlordPhone: pick(lessorRes?.attributes, "phone", "mobile", "mobile_number"),
-    landlordEmail: pick(lessorRes?.attributes, "email"),
-    propertyName: summary.propertyName || pick(propertyRes?.attributes, "name", "property_name", "title"),
+    monthlyRent: summary.monthlyRent || pick(fin, "monthly_rent", "installment_value", "rent_amount"),
+    annualRent: summary.annualRent || pick(fin, "total_value", "annual_rent", "total_contract_value"),
+    depositAmount:
+      pick(a, "security_deposit_value", "deposit", "deposit_amount", "security_deposit") ||
+      pick(fin, "security_deposit_value", "deposit", "deposit_amount"),
+    paymentFrequency: pick(a, "payment_frequency", "paymentFrequency", "payment_cycle", "installment_frequency"),
+    tenantType: String(tenant.type || "").toLowerCase() === "organization" ? "company" : pick(tenant, "type"),
+    tenantName: pick(tenant, "name", "full_name", "party_name") || summary.tenantName,
+    tenantIdNumber: pick(tenant, "id_number", "national_id", "identity_number", "registration_number"),
+    tenantPhone: pick(tenant, "phone_number", "phone", "mobile"),
+    tenantEmail: pick(tenant, "email"),
+    landlordName: pick(lessor, "name", "full_name", "party_name"),
+    landlordIdNumber: pick(lessor, "id_number", "national_id", "identity_number"),
+    landlordPhone: pick(lessor, "phone_number", "phone", "mobile"),
+    landlordEmail: pick(lessor, "email"),
+    propertyName: summary.propertyName,
     tenantBuildingNumber: nationalAddress.buildingNumber,
     tenantPostalCode: nationalAddress.postalCode,
     tenantAdditionalNumber: nationalAddress.additionalNumber,

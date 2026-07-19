@@ -29,7 +29,7 @@ export class EjarApiError extends Error {
 
 export interface EjarCallResult<T = Record<string, unknown>> {
   body: EjarBody<T> | null;
-  log: Awaited<ReturnType<EjarLogService["insert"]>>;
+  log: Record<string, unknown>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -146,11 +146,11 @@ export class EjarClientService {
 
         if (!res.ok) {
           rec.error = this.describe(res.status, parsed);
-          const log = opts.skipLog ? (rec as never) : await this.logs.insert(rec);
+          const log = await this.safeLog(rec, opts.skipLog);
           throw new EjarApiError(rec.error, res.status, rec.transactionId, parsed, log);
         }
 
-        const log = opts.skipLog ? (rec as never) : await this.logs.insert(rec);
+        const log = await this.safeLog(rec, opts.skipLog);
         return { body: unwrapped, log };
       } catch (err) {
         if (err instanceof EjarApiError) throw err;
@@ -164,12 +164,27 @@ export class EjarClientService {
 
     rec.error = lastErr instanceof Error ? lastErr.message : String(lastErr ?? "unknown error");
     rec.durationMs = Date.now() - startedAt;
-    const log = opts.skipLog ? (rec as never) : await this.logs.insert(rec);
+    const log = await this.safeLog(rec, opts.skipLog);
     if (lastErr instanceof EjarApiError) {
       lastErr.log = log;
       throw lastErr;
     }
     throw new EjarApiError(rec.error, rec.status, rec.transactionId, null, log);
+  }
+
+  /**
+   * Persist the log row, but NEVER let a logging failure break the actual
+   * Ejar call. On a DB error we log a warning and return the in-memory record
+   * (with a synthetic id) so the caller still gets its data.
+   */
+  private async safeLog(rec: EjarLogRecordInput, skip?: boolean): Promise<Record<string, unknown>> {
+    if (skip) return rec as unknown as Record<string, unknown>;
+    try {
+      return (await this.logs.insert(rec)) as unknown as Record<string, unknown>;
+    } catch (e) {
+      this.logger.warn(`ejar log insert failed (call still succeeded): ${(e as Error)?.message || e}`);
+      return { ...rec, id: 0, ts: new Date().toISOString() };
+    }
   }
 
   private describe(status: number, body: unknown): string {

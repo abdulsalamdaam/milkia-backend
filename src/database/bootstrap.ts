@@ -137,6 +137,40 @@ export async function ensureSchema(): Promise<void> {
       log.warn(`ensure owner_notifications table failed: ${err?.message || err}`);
     }
 
+    // Ejar (NHC) integration — mark imported contracts + the API request log.
+    // Declared inline (not only in db/sql/) because the runtime image copies
+    // db/init.sql + db/data.sql but NOT db/sql/*, so the passive-migration
+    // file never reaches production. Idempotent, applied on every boot.
+    try {
+      await client.query(`alter table contracts add column if not exists ejar_source text`);
+      await client.query(`
+        create table if not exists ejar_api_logs (
+          id serial primary key,
+          user_id integer,
+          env text not null default 'uat',
+          endpoint text not null,
+          method text not null,
+          url text not null,
+          params jsonb,
+          request_headers jsonb,
+          status integer,
+          ejar_status integer,
+          transaction_id text,
+          duration_ms integer not null default 0,
+          attempts integer not null default 1,
+          response_body jsonb,
+          body_truncated boolean not null default false,
+          error text,
+          created_at timestamptz not null default now()
+        )
+      `);
+      await client.query(`create index if not exists ejar_api_logs_created_idx on ejar_api_logs (created_at)`);
+      await client.query(`create index if not exists ejar_api_logs_endpoint_idx on ejar_api_logs (endpoint)`);
+      await client.query(`create index if not exists ejar_api_logs_user_idx on ejar_api_logs (user_id)`);
+    } catch (err: any) {
+      log.warn(`ensure ejar_source/ejar_api_logs failed: ${err?.message || err}`);
+    }
+
     // Phase 1.6: refresh system role permissions on every boot. Keeps the
     // roles table in sync with code-side ROLE_PRESETS + EMPLOYEE_PRESETS
     // without requiring a hand-written migration each time we add a
