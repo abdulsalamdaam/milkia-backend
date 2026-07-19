@@ -17,6 +17,7 @@ import { DeedsModule } from "./modules/deeds/deeds.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UnitsModule } from "./modules/units/units.module";
 import { ContractsModule } from "./modules/contracts/contracts.module";
+import { EjarModule } from "./modules/ejar/ejar.module";
 import { ImportModule } from "./modules/import/import.module";
 import { PaymentsModule } from "./modules/payments/payments.module";
 import { BillingModule } from "./modules/billing/billing.module";
@@ -66,6 +67,7 @@ import { ReportsModule } from "./modules/reports/reports.module";
     PropertiesModule,
     UnitsModule,
     ContractsModule,
+    EjarModule,
     ImportModule,
     PaymentsModule,
     BillingModule,

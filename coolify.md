@@ -46,3 +46,16 @@ Schema is managed by Drizzle. Two ways to apply:
 curl https://api.oqudk.com/api/healthz
 # → {"status":"ok"}
 ```
+
+## Ejar / NHC integration (this service is the whitelisted caller)
+The "Add Contract using Ejar" feature lives here (`src/modules/ejar`). Outbound
+NHC calls originate from this API container, so it must run on the server whose
+IP NHC whitelisted. Set as **runtime** env vars (never committed):
+
+- `EJAR_BASE_URL` = `https://integration-gw.housingapps.sa/nhc/uat` (prod is blocked in code)
+- `EJAR_CLIENT_ID` = IBM gateway client id
+- `EJAR_CLIENT_SECRET` = IBM gateway client secret
+
+Verify after deploy (needs a user JWT): `GET /api/ejar/health` → `{ "ok": true }`.
+The `contracts.ejar_source` column + `ejar_api_logs` table are created
+automatically on boot (passive migration `db/sql/2026_07_ejar_integration.sql`).

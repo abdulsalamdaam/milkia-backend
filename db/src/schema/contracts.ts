@@ -35,6 +35,10 @@ export const contractsTable = pgTable("contracts", {
   signingPlace: text("signing_place"),
   // Optional reference to the official Ejar (إيجار) platform contract number.
   ejarContractNumber: text("ejar_contract_number"),
+  // Non-null (e.g. "ejar") when this contract was imported from the NHC Ejar
+  // platform rather than entered manually. Drives the "imported" badge and
+  // keeps the two creation paths distinguishable.
+  ejarSource: text("ejar_source"),
   // financial
   startDate: date("start_date").notNull(),
   endDate: date("end_date").notNull(),
