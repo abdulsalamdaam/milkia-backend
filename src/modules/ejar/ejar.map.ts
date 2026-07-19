@@ -20,16 +20,31 @@ function pick(attrs: Attrs | null | undefined, ...keys: string[]): string | null
   return null;
 }
 
-/** Pick a party from an inline `tenants`/`lessors` array, preferring a role. */
+const roleOf = (p: Attrs) => String(p?.role || "").toLowerCase();
+
+/**
+ * Pick the PRIMARY party from an inline `tenants`/`lessors` array — the actual
+ * tenant/lessor (which may be an organization with no `role`), NOT its
+ * representative. Prefers the exact role, then any non-representative party.
+ */
 function party(arr: unknown, preferRole: string): Attrs | null {
   if (!Array.isArray(arr) || arr.length === 0) return null;
   const items = arr as Attrs[];
   return (
-    items.find((p) => String(p.role || "").toLowerCase() === preferRole) ||
-    items.find((p) => String(p.type || "").toLowerCase() === "individual") ||
+    items.find((p) => roleOf(p) === preferRole) ||
+    items.find((p) => !roleOf(p).includes("representative")) ||
     items[0]
   );
 }
+
+/** The representative party (ممثل) in an inline array, if any. */
+function representative(arr: unknown): Attrs | null {
+  if (!Array.isArray(arr)) return null;
+  return (arr as Attrs[]).find((p) => roleOf(p).includes("representative")) || null;
+}
+
+const isOrg = (p: Attrs | null | undefined) =>
+  !!p && /organization|company|establishment/.test(String(p.type || "").toLowerCase());
 
 /** Coerce the many Ejar status spellings into our contract_status enum. */
 export function normalizeStatus(raw: string | null): string {
@@ -132,6 +147,7 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
   const na = firstResource(detail.nationalAddress)?.attributes || {};
 
   const tenant = party(a.tenants, "tenant") || {};
+  const tenantRep = representative(a.tenants);
   const lessor = party(a.lessors, "lessor") || {};
   const region = (a.region && typeof a.region === "object" ? (a.region as Attrs) : {}) as Attrs;
 
@@ -158,11 +174,16 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
       pick(a, "security_deposit_value", "deposit", "deposit_amount", "security_deposit") ||
       pick(fin, "security_deposit_value", "deposit", "deposit_amount"),
     paymentFrequency: pick(a, "payment_frequency", "paymentFrequency", "payment_cycle", "installment_frequency"),
-    tenantType: String(tenant.type || "").toLowerCase() === "organization" ? "company" : pick(tenant, "type"),
+    tenantType: isOrg(tenant) ? "company" : "individual",
     tenantName: pick(tenant, "name", "full_name", "party_name") || summary.tenantName,
     tenantIdNumber: pick(tenant, "id_number", "national_id", "identity_number", "registration_number"),
     tenantPhone: pick(tenant, "phone_number", "phone", "mobile"),
     tenantEmail: pick(tenant, "email"),
+    // Organization tenant → unified number + org type + representative.
+    companyUnified: pick(tenant, "unified_number"),
+    companyOrgType: pick(tenant, "organization_type"),
+    repName: pick(tenantRep, "name", "full_name"),
+    repIdNumber: pick(tenantRep, "id_number", "national_id", "identity_number"),
     landlordName: pick(lessor, "name", "full_name", "party_name"),
     landlordIdNumber: pick(lessor, "id_number", "national_id", "identity_number"),
     landlordPhone: pick(lessor, "phone_number", "phone", "mobile"),
