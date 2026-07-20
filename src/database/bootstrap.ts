@@ -143,6 +143,13 @@ export async function ensureSchema(): Promise<void> {
     // file never reaches production. Idempotent, applied on every boot.
     try {
       await client.query(`alter table contracts add column if not exists ejar_source text`);
+      // Reuse imported properties/units across contracts (dedupe by Ejar UUID).
+      await client.query(`alter table properties add column if not exists ejar_id text`);
+      await client.query(`alter table properties add column if not exists ejar_source text`);
+      await client.query(`alter table units add column if not exists ejar_id text`);
+      await client.query(`alter table units add column if not exists ejar_source text`);
+      await client.query(`create index if not exists properties_ejar_id_idx on properties (user_id, ejar_id)`);
+      await client.query(`create index if not exists units_ejar_id_idx on units (ejar_id)`);
       await client.query(`
         create table if not exists ejar_api_logs (
           id serial primary key,

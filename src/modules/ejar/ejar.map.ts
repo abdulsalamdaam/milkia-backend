@@ -25,11 +25,14 @@ function pick(attrs: Attrs | null | undefined, ...keys: string[]): string | null
   return null;
 }
 
-/** Ejar returns many labels as { ar, en } — prefer Arabic, fall back to en. */
+/**
+ * Ejar returns many labels as objects — { ar, en } on the detail endpoints and
+ * { name_ar, name_en } on Get Properties/Units. Prefer Arabic, fall back to en.
+ */
 function bilingual(v: unknown): string | null {
   if (v && typeof v === "object") {
     const o = v as Record<string, unknown>;
-    return (o.ar as string) || (o.en as string) || null;
+    return (o.ar as string) || (o.name_ar as string) || (o.en as string) || (o.name_en as string) || null;
   }
   return v == null || `${v}`.trim() === "" ? null : `${v}`;
 }
@@ -154,12 +157,95 @@ export interface EjarContractDetail {
   nationalAddress?: EjarBody | null;
   financial?: EjarBody | null;
   invoices?: EjarBody | null;
+  propertiesBody?: EjarBody | null;
+  unitsBody?: EjarBody | null;
+}
+
+export interface EjarPropertyInfo {
+  ejarId: string | null;
+  name: string | null;
+  propertyType: string | null;
+  district: string | null;
+  street: string | null;
+  city: string | null;
+  region: string | null;
+  postalCode: string | null;
+  deedNumber: string | null;
+  yearBuilt: string | null;
+  latitude: string | null;
+  longitude: string | null;
+}
+
+export interface EjarUnitInfo {
+  ejarId: string | null;
+  unitNumber: string | null;
+  unitType: string | null;
+  floor: string | null;
+  area: string | null;
+  rooms: string | null;
+  rentPrice: string | null;
 }
 
 export interface EjarImportPreview {
   contract: Record<string, unknown>;
   invoices: EjarInvoiceRow[];
   nationalAddress: Record<string, string | null>;
+  property: EjarPropertyInfo;
+  units: EjarUnitInfo[];
+}
+
+/** Find a resource in a body's `data` array by id. */
+function findData(body: EjarBody | null | undefined, id: string | null): Attrs {
+  if (!id || !body?.data) return {};
+  const arr = Array.isArray(body.data) ? body.data : [body.data];
+  return arr.find((r) => r.id === id)?.attributes || {};
+}
+
+function localizedName(v: unknown): string | null {
+  if (v && typeof v === "object") return bilingual(v);
+  return v == null ? null : `${v}`;
+}
+
+/** Build the local Property from the contract + optional GetProperties enrich. */
+export function mapEjarProperty(detail: EjarContractDetail): EjarPropertyInfo {
+  const a = detail.contract.attributes || {};
+  const pid = pick(a, "property_id");
+  const p = findData(detail.propertiesBody, pid);
+  const region = (a.region && typeof a.region === "object" ? (a.region as Attrs) : {}) as Attrs;
+  return {
+    ejarId: pid,
+    name: pick(a, "property_name") || pick(p, "name"),
+    propertyType: pick(a, "property_type") || pick(p, "property_type"),
+    district: localizedName(p.district),
+    street: pick(p, "street_name", "street"),
+    city: localizedName(p.city),
+    region: pick(region, "name_ar", "name_en") || localizedName(p.region),
+    postalCode: pick(p, "postcode", "postal_code"),
+    deedNumber: pick(p, "title_deed_number", "deed_number"),
+    yearBuilt: pick(p, "building_year", "year_built"),
+    latitude: pick(a, "latitude") || pick(p, "latitude"),
+    longitude: pick(a, "longitude") || pick(p, "longitude"),
+  };
+}
+
+/** Build the local Unit(s) from the contract.units + optional GetUnits enrich. */
+export function mapEjarUnits(detail: EjarContractDetail): EjarUnitInfo[] {
+  const a = detail.contract.attributes || {};
+  const units = Array.isArray(a.units) ? (a.units as Attrs[]) : [];
+  const naUnit = includedByType(detail.nationalAddress, "national_address_units")[0]?.attributes || {};
+  return units.map((u) => {
+    const uid = pick(u, "id", "unit_id");
+    const full = findData(detail.unitsBody, uid);
+    return {
+      ejarId: uid,
+      unitNumber: pick(u, "unit_number") || pick(full, "unit_number"),
+      unitType: pick(u, "unit_type") || pick(full, "unit_type"),
+      floor: pick(full, "floor_number") || pick(naUnit, "floor_number"),
+      area: pick(full, "area"),
+      rooms: pick(full, "room_count", "bedrooms"),
+      rentPrice: pick(full, "last_rental_price", "rent_price"),
+    };
+  });
 }
 
 export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview {
@@ -236,5 +322,5 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
     if (contract[k] === null || contract[k] === undefined || contract[k] === "") delete contract[k];
   }
 
-  return { contract, invoices, nationalAddress };
+  return { contract, invoices, nationalAddress, property: mapEjarProperty(detail), units: mapEjarUnits(detail) };
 }

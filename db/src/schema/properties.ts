@@ -44,6 +44,10 @@ export const propertiesTable = pgTable("properties", {
   images: jsonb("images"),
   isDraft: boolean("is_draft").notNull().default(false),
   isDemo: boolean("is_demo").notNull().default(false),
+  // Provenance for Ejar (NHC) imports — the Ejar property UUID lets a re-import
+  // reuse the same local property instead of duplicating it.
+  ejarId: text("ejar_id"),
+  ejarSource: text("ejar_source"),
   // Management / commission fee % charged by the managing account (broker /
   // office) to the property's landlord. When > 0, issuing a rent invoice for a
   // tenant also generates a commission invoice (فاتورة عمولة) for the landlord.

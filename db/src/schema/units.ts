@@ -68,6 +68,10 @@ export const unitsTable = pgTable("units", {
   typeOther: text("type_other"),
   directionLookupId: integer("direction_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
   finishingLookupId: integer("finishing_lookup_id").references(() => lookupsTable.id, { onDelete: "set null" }),
+  // Provenance for Ejar (NHC) imports — the Ejar unit UUID lets a re-import
+  // reuse the same local unit and lets one unit sit on multiple contracts.
+  ejarId: text("ejar_id"),
+  ejarSource: text("ejar_source"),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
