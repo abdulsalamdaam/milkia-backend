@@ -4,7 +4,8 @@ import {
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
 import { and, eq } from "drizzle-orm";
-import { contractsTable } from "@oqudk/database";
+import { contractsTable, paymentsTable } from "@oqudk/database";
+import { buildInstallments } from "../contracts/installments";
 import { DRIZZLE, type Drizzle } from "../../database/database.module";
 import { JwtAuthGuard, type AuthUser } from "../../common/guards/jwt-auth.guard";
 import { CurrentUser } from "../../common/decorators/current-user.decorator";
@@ -125,20 +126,31 @@ class EjarController {
 
     const today = new Date().toISOString().slice(0, 10);
     const num2 = (v: unknown) => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
-    const monthly =
-      num2(src.monthlyRent) ?? (num2(src.annualRent) != null ? Number(num2(src.annualRent)) / 12 : null) ?? 0;
+    const str = (v: unknown) => (v == null || v === "" ? null : String(v));
+
+    // Real Ejar invoices arrive as a custom schedule (exact due dates + amounts).
+    const customSchedule = Array.isArray(src.customSchedule)
+      ? (src.customSchedule as Array<{ dueDate?: unknown; amount?: unknown }>)
+          .map((e) => ({ dueDate: String(e?.dueDate ?? "").slice(0, 10), amount: String(e?.amount ?? "") }))
+          .filter((e) => e.dueDate && Number(e.amount) > 0)
+      : [];
+
     const freqRaw = String(src.paymentFrequency || "").toLowerCase();
-    const freq = PAYMENT_FREQ.has(freqRaw)
-      ? freqRaw
+    const freq = customSchedule.length
+      ? "custom"
+      : PAYMENT_FREQ.has(freqRaw) ? freqRaw
       : /year|annual|سنوي/.test(freqRaw) ? "annual"
       : /quarter|ربع/.test(freqRaw) ? "quarterly"
       : /semi|نصف/.test(freqRaw) ? "semi_annual"
       : /month|شهري/.test(freqRaw) ? "monthly"
       : "annual";
+
+    // Rent: prefer the schedule total, then annual/monthly hints. NOT NULL col.
+    const scheduleTotal = customSchedule.reduce((s, e) => s + Number(e.amount), 0);
+    const monthly = num2(src.monthlyRent) ?? num2(src.annualRent) ?? (scheduleTotal || 0);
     const status = ["active", "expired", "terminated", "cancelled", "pending"].includes(String(src.status))
       ? (src.status as string)
       : "active";
-    const str = (v: unknown) => (v == null || v === "" ? null : String(v));
 
     const [created] = await this.db
       .insert(contractsTable)
@@ -147,14 +159,15 @@ class EjarController {
         contractNumber: num,
         ejarSource: "ejar",
         ejarContractNumber: num,
+        tenantType: str(src.tenantType),
         tenantName: str(src.tenantName) || "—",
         tenantIdNumber: str(src.tenantIdNumber),
         tenantPhone: str(src.tenantPhone),
         tenantEmail: str(src.tenantEmail),
-        tenantAddress: str(src.tenantAddress),
-        tenantPostalCode: str(src.tenantPostalCode),
-        tenantAdditionalNumber: str(src.tenantAdditionalNumber),
-        tenantBuildingNumber: str(src.tenantBuildingNumber),
+        companyUnified: str(src.companyUnified),
+        companyOrgType: str(src.companyOrgType),
+        repName: str(src.repName),
+        repIdNumber: str(src.repIdNumber),
         landlordName: str(src.landlordName),
         landlordIdNumber: str(src.landlordIdNumber),
         landlordPhone: str(src.landlordPhone),
@@ -163,12 +176,30 @@ class EjarController {
         endDate: str(src.endDate)?.slice(0, 10) || today,
         monthlyRent: String(monthly),
         paymentFrequency: freq as never,
+        customSchedule: customSchedule.length ? customSchedule : null,
         depositAmount: num2(src.depositAmount) != null ? String(num2(src.depositAmount)) : null,
         status: status as never,
         notes: [str(src.notes), src.propertyName ? `العقار: ${src.propertyName}` : null].filter(Boolean).join(" — ") || null,
       })
       .returning();
-    return created;
+
+    // Generate the payment schedule from the real Ejar invoices (custom) or the
+    // mapped frequency. Mirrors the manual-create path so the Payment Log is
+    // populated with the actual amounts + due dates — not a synthetic 0.
+    let installmentsCreated = 0;
+    try {
+      const rows = buildInstallments(
+        created.id, ownerId, created.startDate, created.endDate, created.monthlyRent, freq,
+        null, false, 0, "percent", null, 0, customSchedule.length ? customSchedule : null,
+      );
+      if (rows.length > 0) {
+        await this.db.insert(paymentsTable).values(rows);
+        installmentsCreated = rows.length;
+      }
+    } catch (e) {
+      // Never let schedule generation fail the import — the contract is saved.
+    }
+    return { ...created, installmentsCreated };
   }
 
   @Get("logs")

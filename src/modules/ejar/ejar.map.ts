@@ -1,11 +1,16 @@
 // Map Ejar (JSON:API) payloads into this API's Contract shape.
 //
-// Field names verified against the real UAT `GetRentalContracts` payload:
-// dates are `start_time`/`end_time`, money is `total_value` /
-// `security_deposit_value`, and parties/units are INLINE arrays on
-// `attributes` (`tenants`, `lessors`, `units`) — not JSON:API relationships.
-// Every accessor still falls back across likely aliases so a shape change
-// degrades gracefully instead of throwing. READ-ONLY: nothing is pushed to NHC.
+// Field names verified against the REAL UAT responses (captured in
+// ejar_api_logs):
+//   GetRentalContracts   — dates start_time/end_time, total_value,
+//                          security_deposit_value, inline tenants/lessors/units.
+//   RentalFinancialData  — rent in included[rental_fees].total_rent_amount.
+//   RentalContractInvoices — invoices in included[payments]: invoice_amount,
+//                          invoice_due_date, payment_status.{ar,en}.
+//   NationalAddress      — NO street address; included has property coordinates
+//                          + property_type and a unit (unit_number, floor_number,
+//                          unit_type). All bilingual fields are {ar,en}.
+// READ-ONLY: nothing is pushed to NHC.
 
 import type { EjarBody, JsonApiResource } from "./ejar.types";
 
@@ -20,13 +25,24 @@ function pick(attrs: Attrs | null | undefined, ...keys: string[]): string | null
   return null;
 }
 
+/** Ejar returns many labels as { ar, en } — prefer Arabic, fall back to en. */
+function bilingual(v: unknown): string | null {
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    return (o.ar as string) || (o.en as string) || null;
+  }
+  return v == null || `${v}`.trim() === "" ? null : `${v}`;
+}
+
+/** Included resources of a given JSON:API type. */
+function includedByType(body: EjarBody | null | undefined, type: string): JsonApiResource[] {
+  const inc = body?.included;
+  return Array.isArray(inc) ? inc.filter((r) => r.type === type) : [];
+}
+
 const roleOf = (p: Attrs) => String(p?.role || "").toLowerCase();
 
-/**
- * Pick the PRIMARY party from an inline `tenants`/`lessors` array — the actual
- * tenant/lessor (which may be an organization with no `role`), NOT its
- * representative. Prefers the exact role, then any non-representative party.
- */
+/** Primary party (actual tenant/lessor, possibly an org) — NOT its representative. */
 function party(arr: unknown, preferRole: string): Attrs | null {
   if (!Array.isArray(arr) || arr.length === 0) return null;
   const items = arr as Attrs[];
@@ -37,7 +53,6 @@ function party(arr: unknown, preferRole: string): Attrs | null {
   );
 }
 
-/** The representative party (ممثل) in an inline array, if any. */
 function representative(arr: unknown): Attrs | null {
   if (!Array.isArray(arr)) return null;
   return (arr as Attrs[]).find((p) => roleOf(p).includes("representative")) || null;
@@ -46,7 +61,6 @@ function representative(arr: unknown): Attrs | null {
 const isOrg = (p: Attrs | null | undefined) =>
   !!p && /organization|company|establishment/.test(String(p.type || "").toLowerCase());
 
-/** Coerce the many Ejar status spellings into our contract_status enum. */
 export function normalizeStatus(raw: string | null): string {
   const s = (raw || "").toLowerCase();
   if (/active|registered|نشط|ساري|current|valid/.test(s)) return "active";
@@ -55,6 +69,15 @@ export function normalizeStatus(raw: string | null): string {
   if (/cancel|ملغ/.test(s)) return "cancelled";
   if (/pend|draft|waiting|مسودة|قيد/.test(s)) return "pending";
   return "active";
+}
+
+/** Ejar payment_frequency → our enum (fallback when there are no invoices). */
+function mapFrequency(raw: string | null): string {
+  const s = (raw || "").toLowerCase();
+  if (/quarter|ربع/.test(s)) return "quarterly";
+  if (/semi|نصف/.test(s)) return "semi_annual";
+  if (/month|شهري/.test(s)) return "monthly";
+  return "annual"; // incl. "one payment" / "دفعة واحدة"
 }
 
 export interface EjarContractSummary {
@@ -101,22 +124,28 @@ export interface EjarInvoiceRow {
   number: string | null;
   dueDate: string | null;
   amount: string | null;
+  remaining: string | null;
   status: string | null;
 }
 
+/** Real invoices live in included[type=payments], not in `data`. */
 export function summarizeInvoices(body?: EjarBody | null): EjarInvoiceRow[] {
-  if (!body?.data) return [];
-  const arr = Array.isArray(body.data) ? body.data : [body.data];
-  return arr.map((r) => {
+  return includedByType(body, "payments").map((r) => {
     const a = r.attributes || {};
     return {
       id: r.id,
-      number: pick(a, "invoice_number", "number", "invoiceNo", "reference"),
-      dueDate: pick(a, "due_date", "dueDate", "invoice_date", "date", "due_time"),
-      amount: pick(a, "amount", "total", "invoice_amount", "value", "total_amount", "total_value"),
-      status: pick(a, "status", "payment_status", "state"),
+      number: pick(a, "sequence_number", "invoice_number", "number", "reference"),
+      dueDate: pick(a, "invoice_due_date", "due_date", "dueDate", "invoice_issue_date"),
+      amount: pick(a, "invoice_amount", "amount", "total", "total_amount"),
+      remaining: pick(a, "invoice_remaining_amount", "remaining_amount"),
+      status: bilingual(a.payment_status) || pick(a, "status", "payment_status"),
     };
   });
+}
+
+/** The rental_fees included resource (RentalFinancialData / Invoices). */
+function rentalFee(body?: EjarBody | null): Attrs {
+  return includedByType(body, "rental_fees")[0]?.attributes || {};
 }
 
 export interface EjarContractDetail {
@@ -127,39 +156,50 @@ export interface EjarContractDetail {
   invoices?: EjarBody | null;
 }
 
-function firstResource(body?: EjarBody | null): JsonApiResource | null {
-  const data = body?.data;
-  if (!data) return null;
-  return Array.isArray(data) ? (data[0] ?? null) : data;
-}
-
 export interface EjarImportPreview {
   contract: Record<string, unknown>;
   invoices: EjarInvoiceRow[];
   nationalAddress: Record<string, string | null>;
 }
 
-/** Assemble the mapped Contract + invoices + address for preview/import. */
 export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview {
   const summary = summarizeContract(detail.contract);
   const a = detail.contract.attributes || {};
-  const fin = firstResource(detail.financial)?.attributes || {};
-  const na = firstResource(detail.nationalAddress)?.attributes || {};
 
   const tenant = party(a.tenants, "tenant") || {};
   const tenantRep = representative(a.tenants);
   const lessor = party(a.lessors, "lessor") || {};
   const region = (a.region && typeof a.region === "object" ? (a.region as Attrs) : {}) as Attrs;
 
+  // Rent: RentalFinancialData.total_rent_amount is authoritative; fall back to
+  // the list's total_value.
+  const fee = rentalFee(detail.financial);
+  const totalRent = pick(fee, "total_rent_amount", "total_rent", "rent_amount") || summary.annualRent;
+
+  // Real invoices → a custom payment schedule (exact amounts + due dates).
+  const invoices = summarizeInvoices(detail.invoices);
+  const customSchedule = invoices
+    .filter((inv) => inv.dueDate && Number(inv.amount) > 0)
+    .map((inv) => ({ dueDate: String(inv.dueDate).slice(0, 10), amount: String(Number(inv.amount)) }));
+
+  // National address: no street — coordinates + property/unit descriptors.
+  const naProp = includedByType(detail.nationalAddress, "national_address_properties")[0]?.attributes || {};
+  const naUnit = includedByType(detail.nationalAddress, "national_address_units")[0]?.attributes || {};
+  const coords = (naProp.coordinates && typeof naProp.coordinates === "object" ? naProp.coordinates : {}) as Attrs;
+  const listUnit = (Array.isArray(a.units) && (a.units as Attrs[])[0]) || {};
   const nationalAddress = {
-    buildingNumber: pick(na, "building_number", "buildingNumber", "building_no"),
-    street: pick(na, "street", "street_name", "streetName"),
-    district: pick(na, "district", "district_name", "neighborhood"),
-    city: pick(na, "city", "city_name") || pick(region, "name_ar", "name_en"),
-    postalCode: pick(na, "postal_code", "postalCode", "zip_code", "zip"),
-    additionalNumber: pick(na, "additional_number", "additionalNumber", "secondary_number"),
-    region: pick(region, "name_ar", "name_en") || pick(na, "region", "region_name"),
+    propertyType: bilingual(naProp.property_type) || pick(a, "property_type"),
+    unitType: bilingual(naUnit.unit_type) || pick(listUnit, "unit_type"),
+    unitNumber: pick(naUnit, "unit_number") || pick(listUnit, "unit_number"),
+    floorNumber: pick(naUnit, "floor_number"),
+    region: pick(region, "name_ar", "name_en"),
+    latitude: coords.latitude != null ? `${coords.latitude}` : pick(a, "latitude"),
+    longitude: coords.longitude != null ? `${coords.longitude}` : pick(a, "longitude"),
   };
+
+  const unitLabel = [nationalAddress.unitNumber && `وحدة ${nationalAddress.unitNumber}`, nationalAddress.floorNumber && `دور ${nationalAddress.floorNumber}`]
+    .filter(Boolean)
+    .join(" - ");
 
   const contract: Record<string, unknown> = {
     ejarSource: "ejar",
@@ -168,18 +208,16 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
     startDate: summary.startDate,
     endDate: summary.endDate,
     status: summary.status,
-    monthlyRent: summary.monthlyRent || pick(fin, "monthly_rent", "installment_value", "rent_amount"),
-    annualRent: summary.annualRent || pick(fin, "total_value", "annual_rent", "total_contract_value"),
-    depositAmount:
-      pick(a, "security_deposit_value", "deposit", "deposit_amount", "security_deposit") ||
-      pick(fin, "security_deposit_value", "deposit", "deposit_amount"),
-    paymentFrequency: pick(a, "payment_frequency", "paymentFrequency", "payment_cycle", "installment_frequency"),
+    annualRent: totalRent,
+    monthlyRent: totalRent, // representative; custom schedule drives installments
+    depositAmount: pick(a, "security_deposit_value", "deposit", "deposit_amount", "security_deposit"),
+    paymentFrequency: customSchedule.length ? "custom" : mapFrequency(bilingual(fee.payment_frequency) || pick(a, "payment_frequency")),
+    customSchedule: customSchedule.length ? customSchedule : undefined,
     tenantType: isOrg(tenant) ? "company" : "individual",
     tenantName: pick(tenant, "name", "full_name", "party_name") || summary.tenantName,
     tenantIdNumber: pick(tenant, "id_number", "national_id", "identity_number", "registration_number"),
     tenantPhone: pick(tenant, "phone_number", "phone", "mobile"),
     tenantEmail: pick(tenant, "email"),
-    // Organization tenant → unified number + org type + representative.
     companyUnified: pick(tenant, "unified_number"),
     companyOrgType: pick(tenant, "organization_type"),
     repName: pick(tenantRep, "name", "full_name"),
@@ -189,18 +227,14 @@ export function mapEjarToContract(detail: EjarContractDetail): EjarImportPreview
     landlordPhone: pick(lessor, "phone_number", "phone", "mobile"),
     landlordEmail: pick(lessor, "email"),
     propertyName: summary.propertyName,
-    tenantBuildingNumber: nationalAddress.buildingNumber,
-    tenantPostalCode: nationalAddress.postalCode,
-    tenantAdditionalNumber: nationalAddress.additionalNumber,
-    tenantAddress:
-      [nationalAddress.street, nationalAddress.district, nationalAddress.city].filter(Boolean).join("، ") ||
-      pick(na, "full_address"),
-    notes: `مستورد من إيجار — عقد رقم ${summary.contractNumber}`,
+    notes: [`مستورد من إيجار — عقد رقم ${summary.contractNumber}`, nationalAddress.propertyType, unitLabel]
+      .filter(Boolean)
+      .join(" — "),
   };
 
   for (const k of Object.keys(contract)) {
     if (contract[k] === null || contract[k] === undefined || contract[k] === "") delete contract[k];
   }
 
-  return { contract, invoices: summarizeInvoices(detail.invoices), nationalAddress };
+  return { contract, invoices, nationalAddress };
 }
