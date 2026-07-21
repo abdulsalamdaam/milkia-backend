@@ -53,6 +53,36 @@ class EjarController {
     }
   }
 
+  /**
+   * Step 1 of the wizard: list a national ID's rental contracts, summarised
+   * server-side. The browser never calls Ejar directly — it calls this, and
+   * the backend calls GetRentalContracts, summarises, and returns the rows +
+   * pagination + the request log.
+   */
+  @Post("contracts")
+  @RequirePermissions(PERMISSIONS.CONTRACTS_VIEW)
+  async listContracts(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { id_number?: string; page?: number; pageSize?: number },
+  ) {
+    const idNumber = body?.id_number?.trim();
+    if (!idNumber) throw new BadRequestException("id_number is required");
+    const page = Math.max(1, Number(body?.page) || 1);
+    const pageSize = Math.min(50, Math.max(1, Number(body?.pageSize) || 10));
+    try {
+      const { body: resp, log } = await this.client.request(
+        "getRentalContracts",
+        { id_number: idNumber, "page[size]": pageSize, "page[number]": page },
+        { userId: user.id },
+      );
+      const contracts = resp ? summarizeContractsBody(resp) : [];
+      const total = Number(resp?.meta?.count ?? contracts.length);
+      return { contracts, total, page, pageSize, log };
+    } catch (err) {
+      throw this.toHttp(err);
+    }
+  }
+
   /** Assemble + map a full import preview for one contract (server-side). */
   @Post("preview")
   @RequirePermissions(PERMISSIONS.CONTRACTS_VIEW)
