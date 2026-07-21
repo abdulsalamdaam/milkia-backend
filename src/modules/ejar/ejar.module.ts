@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, ConflictException, Controller, Get, Inject, Module,
+  BadRequestException, Body, ConflictException, Controller, Get, HttpException, Inject, Module,
   NotFoundException, Param, Post, Query, ServiceUnavailableException, UseGuards,
 } from "@nestjs/common";
 import { ApiTags, ApiBearerAuth } from "@nestjs/swagger";
@@ -107,10 +107,10 @@ class EjarController {
       run(() => this.client.request("rentalFinancialData", { contractNumber, partyType }, { userId: user.id })),
       run(() => this.client.request("rentalContractInvoices", { contractNumber, partyType }, { userId: user.id })),
       broker && propertyId
-        ? run(() => this.client.request("getProperties", { id_number: broker, property_id: propertyId }, { userId: user.id }))
+        ? run(() => this.client.request("getProperties", { id_number: broker, property_ids: propertyId, skip_filter_id_number: "true" }, { userId: user.id }))
         : Promise.resolve(null),
       broker && unitIds
-        ? run(() => this.client.request("getUnits", { id_number: broker, unit_ids: unitIds }, { userId: user.id }))
+        ? run(() => this.client.request("getUnits", { id_number: broker, unit_ids: unitIds, skip_filter_id_number: "true" }, { userId: user.id }))
         : Promise.resolve(null),
     ]);
 
@@ -371,7 +371,17 @@ class EjarController {
   private toHttp(err: unknown) {
     if (err instanceof EjarConfigError) return new ServiceUnavailableException(err.message);
     if (err instanceof EjarApiError) {
-      return new BadRequestException({ message: err.message, status: err.status, transactionId: err.transactionId, log: err.log ?? null });
+      // Surface the REAL upstream status instead of masking everything as 400.
+      // A gateway/whitelist/credential problem is not a client error — mapping
+      // it to 400 made every failure look like a bad request. Client mistakes
+      // (missing param → status 400) stay 400; anything ≥500 (or unknown)
+      // becomes 502 Bad Gateway; 401/403/404 pass through.
+      const upstream = err.status;
+      const code = upstream && upstream >= 400 && upstream < 500 ? upstream : 502;
+      return new HttpException(
+        { message: err.message, status: upstream, transactionId: err.transactionId, log: err.log ?? null },
+        code,
+      );
     }
     return err instanceof Error ? new BadRequestException(err.message) : new BadRequestException("Ejar call failed");
   }
