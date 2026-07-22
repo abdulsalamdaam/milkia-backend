@@ -94,6 +94,9 @@ export class EjarClientService {
       [SECRET_HEADER]: cfg.clientSecret,
       RefId: "1",
       Accept: "application/json",
+      // NHC's gateway sits behind Cloudflare; the default undici UA ("node")
+      // can trip its bot filter with a 403. Present as a normal client.
+      "User-Agent": "Mozilla/5.0 (compatible; OqudkEjarClient/1.0; +https://oqudk.com)",
     };
     if (isExt) headers.CallerReqTime = String(Math.floor(Date.now() / 1000));
 
